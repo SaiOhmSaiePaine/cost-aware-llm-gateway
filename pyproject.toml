@@ -1,0 +1,28 @@
+[project]
+name = "llm-gateway"
+version = "0.7.0"
+description = "Cost-aware, OpenAI-compatible LLM gateway with semantic caching and circuit-breaker failover."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pydantic-settings",
+    "redis>=5",
+    "httpx",
+    "fastembed",
+    "google-genai",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "openai"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
