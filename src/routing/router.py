@@ -48,8 +48,18 @@ class ModelRouter:
     def breaker(self) -> CircuitBreaker:
         return self._breaker
 
-    def classify(self, prompt: str) -> ComplexityResult:
-        return score_prompt_complexity(prompt, threshold=self._settings.complexity_threshold)
+    def classify(
+        self, prompt: str, vector: bytes | None = None, model: str = "auto-router"
+    ) -> ComplexityResult:
+        result = score_prompt_complexity(
+            prompt, threshold=self._settings.complexity_threshold, vector=vector
+        )
+        target = model.strip().lower()
+        if target in {"local", self._settings.local_model.lower()}:
+            return result.model_copy(update={"tier": RouteTier.LOCAL_SMALL})
+        if target in {"cloud", self._settings.cloud_model.lower()}:
+            return result.model_copy(update={"tier": RouteTier.CLOUD_FRONTIER})
+        return result
 
     async def close(self) -> None:
         """Release pooled HTTP connections held by the model clients."""
@@ -57,28 +67,52 @@ class ModelRouter:
         await self._cloud.aclose()
 
     async def dispatch(
-        self, messages: Sequence[ChatTurn], tier: RouteTier, simulate_cloud_outage: bool = False
+        self,
+        messages: Sequence[ChatTurn],
+        tier: RouteTier,
+        simulate_cloud_outage: bool = False,
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
     ) -> DispatchResult:
         """Run the request. Raises UpstreamError only if every eligible backend failed."""
         if tier is RouteTier.LOCAL_SMALL and not simulate_cloud_outage:
-            return await self._run_local(messages, RouteTarget.LOCAL)
-        return await self._run_cloud_with_failover(messages, simulate_cloud_outage)
+            return await self._run_local(
+                messages, RouteTarget.LOCAL, max_tokens=max_tokens, temperature=temperature
+            )
+        return await self._run_cloud_with_failover(
+            messages, simulate_cloud_outage, max_tokens=max_tokens, temperature=temperature
+        )
 
-    async def _run_local(self, messages: Sequence[ChatTurn], route: RouteTarget) -> DispatchResult:
-        result = await self._local.complete(messages)
+    async def _run_local(
+        self,
+        messages: Sequence[ChatTurn],
+        route: RouteTarget,
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
+    ) -> DispatchResult:
+        result = await self._local.complete(messages, max_tokens=max_tokens, temperature=temperature)
         return DispatchResult(result=result, route=route, cost_usd=self._settings.local_cost_per_request_usd)
 
     async def _run_cloud_with_failover(
-        self, messages: Sequence[ChatTurn], simulate_cloud_outage: bool
+        self,
+        messages: Sequence[ChatTurn],
+        simulate_cloud_outage: bool,
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
     ) -> DispatchResult:
         if not self._breaker.allow_request():
             logger.info("circuit_open_bypass", extra={"state": self._breaker.state})
-            return await self._run_local(messages, RouteTarget.LOCAL_CIRCUIT_OPEN)
+            return await self._run_local(
+                messages, RouteTarget.LOCAL_CIRCUIT_OPEN, max_tokens=max_tokens, temperature=temperature
+            )
 
         try:
             if simulate_cloud_outage:
                 raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
-            result = await self._cloud.complete(messages)
+            result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
         except UpstreamError as exc:
             self._breaker.record_failure()
             logger.warning(
@@ -90,7 +124,9 @@ class ModelRouter:
                     "state": self._breaker.state,
                 },
             )
-            return await self._run_local(messages, RouteTarget.LOCAL_FAILOVER)
+            return await self._run_local(
+                messages, RouteTarget.LOCAL_FAILOVER, max_tokens=max_tokens, temperature=temperature
+            )
         finally:
             self._breaker.release_probe()  # no-op unless a probe was cancelled mid-flight
 

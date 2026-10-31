@@ -15,12 +15,22 @@ class OpenAICompatibleClient(LLMClient):
         self._model = model
         self._http = httpx.AsyncClient(base_url=base_url, timeout=timeout_seconds)
 
-    async def complete(self, messages: Sequence[ChatTurn]) -> LLMResult:
+    async def complete(
+        self,
+        messages: Sequence[ChatTurn],
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
+    ) -> LLMResult:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "stream": False,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
         try:
             response = await self._http.post("/chat/completions", json=payload)
             response.raise_for_status()

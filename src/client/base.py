@@ -39,7 +39,13 @@ class LLMClient(ABC):
     name: str
 
     @abstractmethod
-    async def complete(self, messages: Sequence[ChatTurn]) -> LLMResult:
+    async def complete(
+        self,
+        messages: Sequence[ChatTurn],
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
+    ) -> LLMResult:
         """Return a completion or raise UpstreamError."""
 
     async def aclose(self) -> None:  # noqa: B027 - optional hook

@@ -34,7 +34,7 @@ def _set_trace_headers(response: Response, route: str, latency_ms: float, cache_
 
 
 async def _try_cache(
-    services: GatewayServices, prompt: str
+    services: GatewayServices, prompt: str, system_prompt: str, use_cache: bool
 ) -> tuple[bytes | None, float | None, CacheLookupResult | None]:
     """Embed + look up. Any failure degrades to a cache bypass, never a 500."""
     embed_start = time.perf_counter()
@@ -44,7 +44,8 @@ async def _try_cache(
         logger.warning("embedding_failed_cache_bypassed", extra={"error": str(exc)})
         return None, None, None
     embed_ms = _elapsed_ms(embed_start)
-    return vector, embed_ms, await services.cache.lookup(prompt, vector)
+    lookup = await services.cache.lookup(prompt, vector, system_prompt=system_prompt) if use_cache else None
+    return vector, embed_ms, lookup
 
 
 @router.post(
@@ -66,10 +67,11 @@ async def chat_completions(
     stats.total_requests += 1
     prompt = body.last_user_text
     turns = body.to_turns()
+    system_prompt = "\n".join(t.content for t in turns if t.role == "system")
 
     # --- Stage 1: semantic cache (skipped for outage drills and multi-turn chats) ---
     use_cache = body.is_single_turn and not body.simulate_cloud_outage
-    vector, embed_ms, lookup = await _try_cache(services, prompt) if use_cache else (None, None, None)
+    vector, embed_ms, lookup = await _try_cache(services, prompt, system_prompt, use_cache)
 
     if lookup is not None and lookup.guardrail_blocked:
         stats.guardrail_blocks += 1
@@ -93,11 +95,17 @@ async def chat_completions(
             ),
         )
 
-    # --- Stage 2: complexity scoring ---
-    complexity = services.router.classify(prompt)
+    # --- Stage 2: hybrid complexity scoring + explicit model override ---
+    complexity = services.router.classify(prompt, vector=vector, model=body.model)
 
     # --- Stage 3: dispatch with circuit breaker (UpstreamError -> 503 via exception handler) ---
-    dispatch = await services.router.dispatch(turns, complexity.tier, body.simulate_cloud_outage)
+    dispatch = await services.router.dispatch(
+        turns,
+        complexity.tier,
+        body.simulate_cloud_outage,
+        max_tokens=body.max_tokens,
+        temperature=body.temperature,
+    )
 
     if dispatch.route is RouteTarget.LOCAL:
         stats.local_routed_calls += 1
@@ -108,8 +116,10 @@ async def chat_completions(
             stats.failover_saves += 1
 
     # --- Stage 4: background cache write (never cache degraded failover answers) ---
-    if vector is not None and not dispatch.failover_triggered:
-        background_tasks.add_task(services.cache.store, prompt, dispatch.result.text, vector)
+    if use_cache and vector is not None and not dispatch.failover_triggered:
+        background_tasks.add_task(
+            services.cache.store, prompt, dispatch.result.text, vector, system_prompt
+        )
 
     latency_ms = _elapsed_ms(start)
     _set_trace_headers(response, dispatch.route, latency_ms, cache_hit=False)

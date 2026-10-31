@@ -28,12 +28,22 @@ class GeminiClient(LLMClient):
         ]
         return ("\n".join(system_parts) or None), contents
 
-    async def complete(self, messages: Sequence[ChatTurn]) -> LLMResult:
+    async def complete(
+        self,
+        messages: Sequence[ChatTurn],
+        *,
+        max_tokens: int | None = 512,
+        temperature: float | None = None,
+    ) -> LLMResult:
         if self._client is None:
             raise UpstreamError(self.name, "GEMINI_API_KEY is not configured")
 
         system_instruction, contents = self._to_gemini(messages)
-        config = types.GenerateContentConfig(system_instruction=system_instruction)
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        )
         try:
             response = await asyncio.wait_for(
                 self._client.aio.models.generate_content(model=self._model, contents=contents, config=config),
