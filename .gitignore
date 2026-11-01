@@ -28,3 +28,11 @@ build/
 
 # Local AI handoff notes
 antigravity_ai_project_handoff.md
+docs/
+tasks/
+*.drawio
+.*.drawio.bkp
+docs/
+tasks/
+*.drawio
+.*.drawio.bkp
