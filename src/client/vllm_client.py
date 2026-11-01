@@ -19,16 +19,15 @@ class OpenAICompatibleClient(LLMClient):
         self,
         messages: Sequence[ChatTurn],
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResult:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "max_tokens": max_tokens if max_tokens is not None else 512,
             "stream": False,
         }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
         try:

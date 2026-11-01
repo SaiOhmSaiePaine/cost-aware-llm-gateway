@@ -32,7 +32,7 @@ class GeminiClient(LLMClient):
         self,
         messages: Sequence[ChatTurn],
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResult:
         if self._client is None:
@@ -64,3 +64,7 @@ class GeminiClient(LLMClient):
             prompt_tokens=(usage.prompt_token_count or 0) if usage else 0,
             completion_tokens=(usage.candidates_token_count or 0) if usage else 0,
         )
+
+    async def aclose(self) -> None:
+        if self._client is not None and hasattr(self._client, "aio") and hasattr(self._client.aio, "aclose"):
+            await self._client.aio.aclose()

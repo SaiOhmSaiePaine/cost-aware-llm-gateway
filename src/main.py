@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     services = _build_services(settings)
-    services.embedder.warmup()
+    services.router.set_centroids(services.embedder.warmup())
     await ensure_vector_index(services.redis, settings)  # never raises; logs if Redis is down
     app.state.services = services
     logger.info("gateway_started", extra={"local_model": settings.local_model, "cloud_model": settings.cloud_model})

@@ -57,7 +57,7 @@ class ChatCompletionRequest(BaseModel):
     model: str = "auto-router"
     messages: list[ChatMessage] | None = None
     prompt: str | None = Field(default=None, description="Legacy shortcut for a single user message.")
-    max_tokens: int | None = Field(default=512, ge=1, description="Maximum tokens to generate.")
+    max_tokens: int | None = Field(default=None, ge=1, description="Maximum tokens to generate (defaults to 512 on local 1B model).")
     temperature: float | None = Field(default=None, ge=0.0, le=2.0, description="Sampling temperature.")
     stream: bool = False
     simulate_cloud_outage: bool = Field(default=False, description="Force a cloud failure to test failover.")

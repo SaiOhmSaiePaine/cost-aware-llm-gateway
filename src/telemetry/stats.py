@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 
 
+# shortcut: single-worker in-memory state, move to Redis/Prometheus when running --workers > 1
 class GatewayStats(BaseModel):
     total_requests: int = 0
     cache_hits: int = 0

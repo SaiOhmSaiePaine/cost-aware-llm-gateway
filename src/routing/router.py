@@ -7,7 +7,12 @@ from enum import StrEnum
 from src.client.base import ChatTurn, LLMClient, LLMResult, UpstreamError
 from src.config import Settings
 from src.routing.circuit_breaker import CircuitBreaker
-from src.routing.classifier import ComplexityResult, RouteTier, score_prompt_complexity
+from src.routing.classifier import (
+    ComplexityResult,
+    RouteTier,
+    SemanticCentroids,
+    score_prompt_complexity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,22 +42,34 @@ class ModelRouter:
     """Decides the tier for a prompt and executes it with graceful degradation."""
 
     def __init__(
-        self, local: LLMClient, cloud: LLMClient, breaker: CircuitBreaker, settings: Settings
+        self,
+        local: LLMClient,
+        cloud: LLMClient,
+        breaker: CircuitBreaker,
+        settings: Settings,
+        centroids: SemanticCentroids | None = None,
     ) -> None:
         self._local = local
         self._cloud = cloud
         self._breaker = breaker
         self._settings = settings
+        self._centroids = centroids
 
     @property
     def breaker(self) -> CircuitBreaker:
         return self._breaker
 
+    def set_centroids(self, centroids: SemanticCentroids) -> None:
+        self._centroids = centroids
+
     def classify(
         self, prompt: str, vector: bytes | None = None, model: str = "auto-router"
     ) -> ComplexityResult:
         result = score_prompt_complexity(
-            prompt, threshold=self._settings.complexity_threshold, vector=vector
+            prompt,
+            threshold=self._settings.complexity_threshold,
+            vector=vector,
+            centroids=self._centroids,
         )
         target = model.strip().lower()
         if target in {"local", self._settings.local_model.lower()}:
@@ -72,7 +89,7 @@ class ModelRouter:
         tier: RouteTier,
         simulate_cloud_outage: bool = False,
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> DispatchResult:
         """Run the request. Raises UpstreamError only if every eligible backend failed."""
@@ -89,7 +106,7 @@ class ModelRouter:
         messages: Sequence[ChatTurn],
         route: RouteTarget,
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> DispatchResult:
         result = await self._local.complete(messages, max_tokens=max_tokens, temperature=temperature)
@@ -100,7 +117,7 @@ class ModelRouter:
         messages: Sequence[ChatTurn],
         simulate_cloud_outage: bool,
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> DispatchResult:
         if not self._breaker.allow_request():
@@ -114,7 +131,8 @@ class ModelRouter:
                 raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
             result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
         except UpstreamError as exc:
-            self._breaker.record_failure()
+            if not simulate_cloud_outage:
+                self._breaker.record_failure()
             logger.warning(
                 "cloud_failover",
                 extra={

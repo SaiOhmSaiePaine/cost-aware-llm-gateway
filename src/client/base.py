@@ -43,7 +43,7 @@ class LLMClient(ABC):
         self,
         messages: Sequence[ChatTurn],
         *,
-        max_tokens: int | None = 512,
+        max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResult:
         """Return a completion or raise UpstreamError."""

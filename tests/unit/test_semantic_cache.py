@@ -45,9 +45,9 @@ def _make_fake_embedder() -> OnnxEmbedder:
         yield np.ones(384, dtype=np.float32)
 
     embedder._model = SimpleNamespace(embed=_fake_embed_list)
-    from functools import lru_cache
+    from collections import OrderedDict
 
-    embedder._cached_embed = lru_cache(maxsize=1024)(embedder._embed_raw)
+    embedder._cache = OrderedDict()
     embedder.call_count = lambda: call_count  # type: ignore[attr-defined]
     return embedder
 
@@ -146,13 +146,27 @@ async def test_explicit_model_override_and_bounded_generation_forwarding() -> No
     c_cloud = router.classify("Hello there", model="cloud")
     assert c_cloud.tier is RouteTier.CLOUD_FRONTIER
 
-    # Default max_tokens=512 on ChatCompletionRequest and forwarded through dispatch
-    req = ChatCompletionRequest.model_validate({"prompt": "Hello", "temperature": 0.2})
-    assert req.max_tokens == 512
-    assert req.temperature == 0.2
+    # Default max_tokens=None on ChatCompletionRequest so Cloud isn't truncated, while explicit values forward
+    req_default = ChatCompletionRequest.model_validate({"prompt": "Hello", "temperature": 0.2})
+    assert req_default.max_tokens is None
+    assert req_default.temperature == 0.2
 
     await router.dispatch(
-        req.to_turns(), c_local.tier, max_tokens=req.max_tokens, temperature=req.temperature
+        req_default.to_turns(),
+        c_cloud.tier,
+        max_tokens=req_default.max_tokens,
+        temperature=req_default.temperature,
     )
-    assert local.last_kwargs == {"max_tokens": 512, "temperature": 0.2}
+    assert cloud.last_kwargs == {"max_tokens": None, "temperature": 0.2}
+
+    req_bounded = ChatCompletionRequest.model_validate(
+        {"prompt": "Hello", "max_tokens": 256, "temperature": 0.1}
+    )
+    await router.dispatch(
+        req_bounded.to_turns(),
+        c_local.tier,
+        max_tokens=req_bounded.max_tokens,
+        temperature=req_bounded.temperature,
+    )
+    assert local.last_kwargs == {"max_tokens": 256, "temperature": 0.1}
 

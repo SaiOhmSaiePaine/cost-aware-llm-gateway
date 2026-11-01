@@ -14,6 +14,7 @@ class BreakerState(StrEnum):
     HALF_OPEN = "HALF_OPEN"  # Cooldown over: exactly one probe request is allowed through
 
 
+# shortcut: single-worker in-memory state, move to Redis/Prometheus when running --workers > 1
 class CircuitBreaker:
     """Trips after N consecutive failures; lets a single probe through after a cooldown."""
 

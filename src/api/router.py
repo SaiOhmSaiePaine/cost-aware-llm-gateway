@@ -107,11 +107,11 @@ async def chat_completions(
         temperature=body.temperature,
     )
 
-    if dispatch.route is RouteTarget.LOCAL:
+    if dispatch.route is RouteTarget.CLOUD:
+        stats.cloud_routed_calls += 1
+    else:
         stats.local_routed_calls += 1
         stats.add_savings(settings.cloud_cost_per_request_usd - dispatch.cost_usd)
-    else:
-        stats.cloud_routed_calls += 1
         if dispatch.failover_triggered:
             stats.failover_saves += 1
 
