@@ -93,7 +93,7 @@ def test_chat_completions_local_cloud_and_cache_hit() -> None:
     assert r_cloud.headers["X-Gateway-Route"] == "CLOUD"
     assert r_cloud.json()["gateway_metadata"]["routed_to"] == "CLOUD"
 
-    # 3. Simulated outage -> LOCAL_AUTO_FAILOVER_FROM_CLOUD without tripping shared breaker
+    # 3. Simulated outage -> LOCAL_AUTO_FAILOVER_FROM_CLOUD for cloud prompts, LOCAL for local prompts
     for _ in range(3):
         r_fail = client.post(
             "/v1/chat/completions",
@@ -103,11 +103,17 @@ def test_chat_completions_local_cloud_and_cache_hit() -> None:
         assert r_fail.json()["gateway_metadata"]["routed_to"] == "LOCAL_AUTO_FAILOVER_FROM_CLOUD"
     assert services.router.breaker.state == "CLOSED"
 
+    r_local_outage = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "Hello!", "simulate_cloud_outage": True},
+    )
+    assert r_local_outage.json()["gateway_metadata"]["routed_to"] == "LOCAL"
+
     # 4. Health & Admin stats verify local_routed_calls includes failover calls
     health = client.get("/health").json()
     assert health == {"status": "ok", "redis": "up", "circuit_breaker_state": "CLOSED"}
     stats = client.get("/v1/admin/stats").json()
-    assert stats["local_routed_calls"] == 4
+    assert stats["local_routed_calls"] == 5
     assert stats["cloud_routed_calls"] == 1
     assert stats["failover_saves"] == 3
 

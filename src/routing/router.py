@@ -93,7 +93,7 @@ class ModelRouter:
         temperature: float | None = None,
     ) -> DispatchResult:
         """Run the request. Raises UpstreamError only if every eligible backend failed."""
-        if tier is RouteTier.LOCAL_SMALL and not simulate_cloud_outage:
+        if tier is RouteTier.LOCAL_SMALL:
             return await self._run_local(
                 messages, RouteTarget.LOCAL, max_tokens=max_tokens, temperature=temperature
             )
@@ -125,14 +125,19 @@ class ModelRouter:
             return await self._run_local(
                 messages, RouteTarget.LOCAL_CIRCUIT_OPEN, max_tokens=max_tokens, temperature=temperature
             )
+        was_probe = self._breaker.state == "HALF_OPEN"
 
         try:
-            if simulate_cloud_outage:
-                raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
-            result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
+            try:
+                if simulate_cloud_outage:
+                    raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
+                result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
+            finally:
+                if was_probe:
+                    self._breaker.release_probe()
         except UpstreamError as exc:
             if not simulate_cloud_outage:
-                self._breaker.record_failure()
+                self._breaker.record_failure(was_probe=was_probe)
             logger.warning(
                 "cloud_failover",
                 extra={
@@ -145,8 +150,6 @@ class ModelRouter:
             return await self._run_local(
                 messages, RouteTarget.LOCAL_FAILOVER, max_tokens=max_tokens, temperature=temperature
             )
-        finally:
-            self._breaker.release_probe()  # no-op unless a probe was cancelled mid-flight
 
         self._breaker.record_success()
         return DispatchResult(

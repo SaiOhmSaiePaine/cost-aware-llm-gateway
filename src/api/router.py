@@ -65,12 +65,12 @@ async def chat_completions(
     start = time.perf_counter()
     stats, settings, breaker = services.stats, services.settings, services.router.breaker
     stats.total_requests += 1
-    prompt = body.last_user_text
     turns = body.to_turns()
+    prompt = next(t.content for t in reversed(turns) if t.role == "user")
     system_prompt = "\n".join(t.content for t in turns if t.role == "system")
 
     # --- Stage 1: semantic cache (skipped for outage drills and multi-turn chats) ---
-    use_cache = body.is_single_turn and not body.simulate_cloud_outage
+    use_cache = not body.simulate_cloud_outage and not any(t.role == "assistant" for t in turns)
     vector, embed_ms, lookup = await _try_cache(services, prompt, system_prompt, use_cache)
 
     if lookup is not None and lookup.guardrail_blocked:

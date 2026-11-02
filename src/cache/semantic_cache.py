@@ -5,9 +5,11 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 from redis.commands.search.query import Query
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, ResponseError
 
+from src.cache.embedder import _normalize_key
 from src.cache.guardrails import passes_guardrails
+from src.cache.redis_client import ensure_vector_index
 from src.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -31,10 +33,6 @@ def _to_str(value: str | bytes) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-def _normalize_system(system_prompt: str) -> str:
-    return " ".join(system_prompt.strip().lower().split())
-
-
 class SemanticCache:
     """Redis Stack HNSW-backed semantic cache. Never raises on Redis failure."""
 
@@ -55,6 +53,11 @@ class SemanticCache:
             results = await self._client.ft(self._settings.cache_index_name).search(
                 self._query, query_params={"vec": vector}
             )
+        except ResponseError as exc:
+            if "no such index" in str(exc).lower():
+                await ensure_vector_index(self._client, self._settings)
+            logger.warning("cache_lookup_bypassed", extra={"error": str(exc)})
+            return _MISS
         except (RedisError, OSError) as exc:
             logger.warning("cache_lookup_bypassed", extra={"error": str(exc)})
             return _MISS
@@ -62,7 +65,7 @@ class SemanticCache:
         if not results.docs:
             return _MISS
 
-        norm_sys = _normalize_system(system_prompt)
+        norm_sys = _normalize_key(system_prompt)
         blocked: tuple[str, float] | None = None
 
         for doc in results.docs:
@@ -70,7 +73,7 @@ class SemanticCache:
             if similarity < self._settings.similarity_threshold:
                 continue
 
-            cached_sys = _normalize_system(_to_str(getattr(doc, "system_prompt", "") or ""))
+            cached_sys = _normalize_key(_to_str(getattr(doc, "system_prompt", "") or ""))
             if cached_sys != norm_sys:
                 continue
 
@@ -100,7 +103,7 @@ class SemanticCache:
                     key,
                     mapping={
                         "prompt": prompt,
-                        "system_prompt": _normalize_system(system_prompt),
+                        "system_prompt": _normalize_key(system_prompt),
                         "answer": answer,
                         "vector": vector,
                     },

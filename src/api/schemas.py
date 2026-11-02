@@ -9,14 +9,15 @@ from src.client.base import ChatTurn
 from src.routing.classifier import ComplexityBreakdown
 
 _SWAGGER_PLACEHOLDER = "string"
+_MAX_PROMPT_CHARS = 100_000
 
 
-def _is_meaningful(text: str | None) -> bool:
-    """Return True if text is non-empty and not Swagger UI's default 'string' placeholder."""
+def _is_meaningful(text: str | None, *, strip_placeholder: bool = False) -> bool:
+    """Return True if text is non-empty (and not Swagger's 'string' placeholder when both fields are sent)."""
     if text is None:
         return False
     stripped = text.strip()
-    return bool(stripped) and stripped != _SWAGGER_PLACEHOLDER
+    return bool(stripped) and not (strip_placeholder and stripped == _SWAGGER_PLACEHOLDER)
 
 
 class TextContentPart(BaseModel):
@@ -64,9 +65,10 @@ class ChatCompletionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_user_input(self) -> "ChatCompletionRequest":
-        # Strip untouched Swagger UI "string" placeholders so `prompt` and `messages` don't collide
-        clean_prompt = self.prompt.strip() if _is_meaningful(self.prompt) and self.prompt else None
-        clean_messages = [m for m in (self.messages or []) if _is_meaningful(m.text)]
+        # Strip untouched Swagger UI "string" placeholders when both `prompt` and `messages` are present
+        both_sent = self.prompt is not None and self.messages is not None
+        clean_prompt = self.prompt.strip() if _is_meaningful(self.prompt, strip_placeholder=both_sent) and self.prompt else None
+        clean_messages = [m for m in (self.messages or []) if _is_meaningful(m.text, strip_placeholder=both_sent)]
 
         # If a meaningful `prompt` is provided, use it as the active user turn (preserving any system turns)
         if clean_prompt:
@@ -77,6 +79,8 @@ class ChatCompletionRequest(BaseModel):
             raise ValueError("Provide a non-empty 'prompt' or 'messages' (replace the default 'string' placeholder).")
         if clean_messages and not any(m.role == "user" for m in clean_messages):
             raise ValueError("'messages' must contain at least one non-empty user message.")
+        if sum(len(m.text) for m in clean_messages) > _MAX_PROMPT_CHARS:
+            raise ValueError(f"Total message length exceeds {_MAX_PROMPT_CHARS} characters.")
 
         self.prompt = clean_prompt
         self.messages = clean_messages or None
@@ -90,15 +94,6 @@ class ChatCompletionRequest(BaseModel):
             ChatTurn(role="system" if m.role == "developer" else m.role, content=m.text.strip())
             for m in self.messages
         ]
-
-    @property
-    def last_user_text(self) -> str:
-        return next(t.content for t in reversed(self.to_turns()) if t.role == "user").strip()
-
-    @property
-    def is_single_turn(self) -> bool:
-        """Only single-turn requests are cacheable; multi-turn answers depend on history."""
-        return not any(t.role == "assistant" for t in self.to_turns())
 
 
 class AssistantMessage(BaseModel):

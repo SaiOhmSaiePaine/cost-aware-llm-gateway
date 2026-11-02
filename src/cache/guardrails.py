@@ -12,15 +12,15 @@ NEGATION_TOKENS: frozenset[str] = frozenset(
 )
 
 
-def extract_numbers(text: str) -> set[str]:
-    """Numbers with punctuation-insensitive normalization: '2024?' -> '2024', '1,000' -> '1000'."""
-    return {match.replace(",", "") for match in _NUMBER_RE.findall(text)}
+def extract_numbers(text: str) -> list[str]:
+    """Ordered numbers with punctuation-insensitive normalization: '2024?' -> '2024', '1,000' -> '1000'."""
+    return [match.replace(",", "") for match in _NUMBER_RE.findall(text)]
 
 
 def extract_negations(text: str) -> set[str]:
-    """Negation markers, treating contractions like "don't" / "isn't" as 'not'."""
+    """Negation markers, treating contractions like "don't" / "isn't" (including curly '’') as 'not'."""
     negations: set[str] = set()
-    for word in _WORD_RE.findall(text.lower()):
+    for word in _WORD_RE.findall(text.lower().replace("’", "'")):
         if word in NEGATION_TOKENS:
             negations.add(word)
         elif word.endswith("n't"):

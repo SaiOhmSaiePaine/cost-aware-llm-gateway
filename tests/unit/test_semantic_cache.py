@@ -170,3 +170,22 @@ async def test_explicit_model_override_and_bounded_generation_forwarding() -> No
     )
     assert local.last_kwargs == {"max_tokens": 256, "temperature": 0.1}
 
+
+@pytest.mark.anyio
+async def test_missing_redis_index_self_heals_on_lookup() -> None:
+    from redis.exceptions import ResponseError
+
+    settings = Settings()
+    ft_mock = MagicMock()
+    ft_mock.search = AsyncMock(side_effect=ResponseError("idx:llm_cache: no such index"))
+    ft_mock.info = AsyncMock(side_effect=ResponseError("Unknown Index name"))
+    ft_mock.create_index = AsyncMock(return_value=True)
+    redis_mock = MagicMock()
+    redis_mock.ft.return_value = ft_mock
+
+    cache = SemanticCache(redis_mock, settings)
+    res = await cache.lookup("Hello", b"\x00" * 1536)
+    assert res.hit is False
+    ft_mock.create_index.assert_awaited_once()
+
+

@@ -60,12 +60,11 @@ class CircuitBreaker:
         self._opened_at = None
         self._probe_in_flight = False
 
-    def record_failure(self) -> None:
+    def record_failure(self, was_probe: bool = False) -> None:
         self._failure_count += 1
-        was_probe = self._probe_in_flight
-        self._probe_in_flight = False
-        if was_probe or self._failure_count >= self._threshold:
+        if was_probe or self._probe_in_flight or self._failure_count >= self._threshold:
             self._opened_at = self._clock()  # (Re-)open and restart the cooldown
+        self._probe_in_flight = False
 
     def release_probe(self) -> None:
         """Free the half-open slot if a probe ended without a verdict (e.g. client cancelled)."""

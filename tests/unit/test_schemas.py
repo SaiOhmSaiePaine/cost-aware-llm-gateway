@@ -16,7 +16,7 @@ def test_prompt_wins_when_messages_has_swagger_string_placeholder() -> None:
             "simulate_cloud_outage": False,
         }
     )
-    assert req.last_user_text == "What is the capital of Japan?"
+    assert req.to_turns()[-1].content == "What is the capital of Japan?"
 
 
 def test_prompt_works_even_when_swagger_messages_has_system_role_placeholder() -> None:
@@ -28,8 +28,9 @@ def test_prompt_works_even_when_swagger_messages_has_system_role_placeholder() -
             "prompt": "Explain B-tree indexes",
         }
     )
-    assert req.last_user_text == "Explain B-tree indexes"
-    assert len(req.to_turns()) == 1
+    turns = req.to_turns()
+    assert len(turns) == 1
+    assert turns[0].content == "Explain B-tree indexes"
 
 
 def test_messages_works_when_prompt_has_swagger_string_placeholder() -> None:
@@ -41,7 +42,7 @@ def test_messages_works_when_prompt_has_swagger_string_placeholder() -> None:
             "prompt": "string",
         }
     )
-    assert req.last_user_text == "Hello from messages"
+    assert req.to_turns()[-1].content == "Hello from messages"
 
 
 def test_both_swagger_placeholders_rejected_with_422() -> None:
@@ -54,3 +55,12 @@ def test_both_swagger_placeholders_rejected_with_422() -> None:
                 "prompt": "string",
             }
         )
+
+
+def test_single_field_literal_string_is_allowed_and_oversized_prompt_rejected() -> None:
+    """An SDK caller sending only `messages` with content='string' succeeds, while >100k chars fails."""
+    req = ChatCompletionRequest.model_validate({"messages": [{"role": "user", "content": "string"}]})
+    assert req.to_turns()[0].content == "string"
+
+    with pytest.raises(ValidationError):
+        ChatCompletionRequest.model_validate({"prompt": "a" * 100_001})
