@@ -37,6 +37,7 @@ async def ensure_vector_index(client: Redis, settings: Settings) -> bool:
     schema = (
         TextField("prompt"),
         TextField("system_prompt"),
+        TextField("route"),
         TextField("answer"),
         VectorField(
             "vector",

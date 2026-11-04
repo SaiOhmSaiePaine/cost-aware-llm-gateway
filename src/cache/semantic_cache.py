@@ -42,13 +42,15 @@ class SemanticCache:
         self._query = (
             Query("*=>[KNN 3 @vector $vec AS vector_distance]")
             .sort_by("vector_distance")
-            .return_fields("prompt", "system_prompt", "answer", "vector_distance")
+            .return_fields("prompt", "system_prompt", "route", "answer", "vector_distance")
             .paging(0, 3)
             .dialect(2)
         )
 
-    async def lookup(self, prompt: str, vector: bytes, system_prompt: str = "") -> CacheLookupResult:
-        """Inspect up to 3 nearest neighbors; return the first passing similarity, system isolation, and guardrails."""
+    async def lookup(
+        self, prompt: str, vector: bytes, system_prompt: str = "", route: str = ""
+    ) -> CacheLookupResult:
+        """Inspect up to 3 nearest neighbors; return the first passing similarity, system/route isolation, and guardrails."""
         try:
             results = await self._client.ft(self._settings.cache_index_name).search(
                 self._query, query_params={"vec": vector}
@@ -77,6 +79,10 @@ class SemanticCache:
             if cached_sys != norm_sys:
                 continue
 
+            cached_route = _to_str(getattr(doc, "route", "") or "")
+            if route and cached_route and cached_route != route:
+                continue
+
             cached_prompt = _to_str(doc.prompt)
             if not passes_guardrails(prompt, cached_prompt):
                 if blocked is None:
@@ -94,7 +100,9 @@ class SemanticCache:
             )
         return _MISS
 
-    async def store(self, prompt: str, answer: str, vector: bytes, system_prompt: str = "") -> None:
+    async def store(
+        self, prompt: str, answer: str, vector: bytes, system_prompt: str = "", route: str = ""
+    ) -> None:
         """Write an entry with TTL in one round-trip. Intended to run as a background task."""
         key = f"{self._settings.cache_key_prefix}{uuid.uuid4()}"
         try:
@@ -104,6 +112,7 @@ class SemanticCache:
                     mapping={
                         "prompt": prompt,
                         "system_prompt": _normalize_key(system_prompt),
+                        "route": route,
                         "answer": answer,
                         "vector": vector,
                     },

@@ -14,13 +14,14 @@ from src.api.schemas import (
     GatewayMetadata,
     Usage,
 )
-from src.cache.semantic_cache import CacheLookupResult
+from src.routing.classifier import RouteTier
 from src.routing.router import RouteTarget
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 ServicesDep = Annotated[GatewayServices, Depends(get_services)]
+_MAX_CACHEABLE_CHARS = 1000
 
 
 def _elapsed_ms(start: float) -> float:
@@ -33,19 +34,14 @@ def _set_trace_headers(response: Response, route: str, latency_ms: float, cache_
     response.headers["X-Gateway-Cache-Hit"] = str(cache_hit).lower()
 
 
-async def _try_cache(
-    services: GatewayServices, prompt: str, system_prompt: str, use_cache: bool
-) -> tuple[bytes | None, float | None, CacheLookupResult | None]:
-    """Embed + look up. Any failure degrades to a cache bypass, never a 500."""
+async def _embed_safe(services: GatewayServices, prompt: str) -> tuple[bytes | None, float | None]:
+    """Embed prompt; any ONNX failure degrades to a cache/semantic bypass, never a 500."""
     embed_start = time.perf_counter()
     try:
-        vector = await services.embedder.aembed(prompt)
-    except Exception as exc:  # ONNX failures must not take the gateway down
+        return await services.embedder.aembed(prompt), _elapsed_ms(embed_start)
+    except Exception as exc:
         logger.warning("embedding_failed_cache_bypassed", extra={"error": str(exc)})
-        return None, None, None
-    embed_ms = _elapsed_ms(embed_start)
-    lookup = await services.cache.lookup(prompt, vector, system_prompt=system_prompt) if use_cache else None
-    return vector, embed_ms, lookup
+        return None, None
 
 
 @router.post(
@@ -69,9 +65,23 @@ async def chat_completions(
     prompt = next(t.content for t in reversed(turns) if t.role == "user")
     system_prompt = "\n".join(t.content for t in turns if t.role == "system")
 
-    # --- Stage 1: semantic cache (skipped for outage drills and multi-turn chats) ---
-    use_cache = not body.simulate_cloud_outage and not any(t.role == "assistant" for t in turns)
-    vector, embed_ms, lookup = await _try_cache(services, prompt, system_prompt, use_cache)
+    # --- Stage 1 & 2: embed, classify tier, and look up tier-isolated semantic cache ---
+    use_cache = (
+        not body.simulate_cloud_outage
+        and body.max_tokens is None
+        and body.temperature is None
+        and not any(t.role == "assistant" for t in turns)
+        # MiniLM reads only ~256 tokens; longer prompts with different tails embed identically
+        and len(prompt) <= _MAX_CACHEABLE_CHARS
+    )
+    vector, embed_ms = await _embed_safe(services, prompt)
+    complexity = services.router.classify(prompt, vector=vector, model=body.model)
+    target_route = RouteTarget.CLOUD if complexity.tier is RouteTier.CLOUD_FRONTIER else RouteTarget.LOCAL
+    lookup = (
+        await services.cache.lookup(prompt, vector, system_prompt=system_prompt, route=target_route)
+        if use_cache and vector is not None
+        else None
+    )
 
     if lookup is not None and lookup.guardrail_blocked:
         stats.guardrail_blocks += 1
@@ -95,9 +105,6 @@ async def chat_completions(
             ),
         )
 
-    # --- Stage 2: hybrid complexity scoring + explicit model override ---
-    complexity = services.router.classify(prompt, vector=vector, model=body.model)
-
     # --- Stage 3: dispatch with circuit breaker (UpstreamError -> 503 via exception handler) ---
     dispatch = await services.router.dispatch(
         turns,
@@ -118,7 +125,7 @@ async def chat_completions(
     # --- Stage 4: background cache write (never cache degraded failover answers) ---
     if use_cache and vector is not None and not dispatch.failover_triggered:
         background_tasks.add_task(
-            services.cache.store, prompt, dispatch.result.text, vector, system_prompt
+            services.cache.store, prompt, dispatch.result.text, vector, system_prompt, dispatch.route
         )
 
     latency_ms = _elapsed_ms(start)

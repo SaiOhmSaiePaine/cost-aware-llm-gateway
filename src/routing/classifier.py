@@ -18,12 +18,12 @@ REASONING_KEYWORDS: frozenset[str] = frozenset({
     "dynamic programming", "recursion", "distributed", "scalability",
     "microservice", "rate limiter", "load balancer", "consensus",
     "b-tree", "lsm", "integral", "derivative", "eigenvalue", "differential",
-    "theorem", "probability", "why does my", "stack trace", "segmentation fault",
+    "theorem", "probability", "stack trace", "segmentation fault",
     "segfault", "nullpointerexception",
 })
 CODE_INDICATORS: frozenset[str] = frozenset({
-    "def ", "class ", "fn ", "pub fn", "impl", "struct", "async ",
-    "import ", "from ", "SELECT ", "WHERE ", "JOIN ", "```", "{", "}",
+    "def ", "class ", "fn ", "pub fn", "impl ", "struct ", "async ",
+    "import ", "SELECT ", "WHERE ", "JOIN ", "```", "{", "}",
 })
 CODE_KEYWORDS: frozenset[str] = frozenset({
     "search function", "write a function", "implement", "refactor", "useeffect",
@@ -32,27 +32,50 @@ CODE_KEYWORDS: frozenset[str] = frozenset({
     "asyncio", "leetcode", "linked list", "hash map", "lru cache",
     "binary tree", "quicksort", "mergesort",
 })
-_CODE_KW_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(rf"(?<!\w){re.escape(kw)}(?!\w)") for kw in CODE_KEYWORDS
+_CODE_KW_RE: re.Pattern[str] = re.compile(
+    r"(?<!\w)(?:" + "|".join(re.escape(kw) for kw in CODE_KEYWORDS) + r")(?!\w)"
 )
+_MAX_SCAN_CHARS = 4096
 SIMPLE_TASK_KEYWORDS: frozenset[str] = frozenset({
     "fix typo", "fix typos", "grammar", "summarize", "summary",
     "translate", "rephrase", "format as", "bullet points", "polite", "casual",
 })
 
 COMPLEX_PROTOTYPES: tuple[str, ...] = (
-    "Write a Python function or algorithm to implement a data structure",
-    "Debug this code error, stack trace, infinite loop, or exception",
-    "Design a distributed system architecture with high scalability and concurrency",
-    "Solve this calculus integral, linear algebra, probability, or mathematical proof",
-    "Write an optimized SQL query with joins, indexes, and aggregations",
+    "Write a function, method, or algorithm in Python, JavaScript, Rust, Go, Java, or C++",
+    "Implement a data structure such as a tree, graph, hash table, heap, queue, or cache",
+    "Debug this software error, stack trace, crash, exit code, segmentation fault, or memory leak",
+    "Troubleshoot a backend server, HTTP status error, API gateway, reverse proxy, or timeout",
+    "Design a distributed system architecture with high scalability, replication, and fault tolerance",
+    "Write an optimized SQL database query, schema migration, join, or index tuning",
+    "Fix security vulnerabilities, authentication, encryption, or injection attacks",
+    "Solve this calculus integral, derivative, linear algebra matrix, or differential equation",
+    "Prove this mathematical theorem, recurrence relation, probability, or statistical model",
+    "Write a shell script, CLI automation, file processor, or regular expression pattern",
+    "Configure cloud infrastructure, containers, orchestration, or continuous integration pipelines",
+    "Manage version control branches, commits, rebasing, and merge conflicts",
+    "Build a frontend web interface, CSS layout, DOM component, or state management",
+    "Serialize, parse, or transform structured data formats, schemas, and data frames",
+    "Explain operating system internals, memory management, concurrency, threads, or compilers",
+    "Write automated unit or integration tests with mocks, fixtures, and assertions",
 )
 SIMPLE_PROTOTYPES: tuple[str, ...] = (
     "Hello, how are you doing today?",
-    "What is the capital city of a country or a basic factual question?",
-    "Translate this short phrase or sentence into another language",
-    "Fix typos, grammar, summarize in bullet points, or rephrase politely",
-    "Tell me a short joke or a simple everyday greeting",
+    "What is the capital city of a country or a basic world geography fact?",
+    "Who won a historical event, sports championship, or wrote a famous novel?",
+    "Translate this short phrase or everyday greeting into another language",
+    "Summarize this short paragraph in bullet points or make it briefer",
+    "Fix typos, spelling, grammar, or rewrite a sentence to sound polite",
+    "Draft a short thank-you note, out-of-office reply, or casual message",
+    "Give me a kitchen recipe or step-by-step instructions to cook food at home",
+    "How many cups, ounces, miles, or minutes are in an everyday measurement?",
+    "Recommend a few popular movies, novels, songs, or vacation spots",
+    "What are common symptoms of a minor illness or general wellness habits?",
+    "Explain a basic nature, plant, or animal fact to a young child",
+    "What time zone is a city in or what is the local weather forecast?",
+    "List a few ideas for breakfast, birthday gifts, or weekend hobbies",
+    "Tell me a short family-friendly joke, riddle, or fun animal trivia",
+    "What is the everyday meaning of a common word or proverb?",
 )
 
 # Feature weights and caps
@@ -64,33 +87,33 @@ CODE_CAP = 0.35
 VOLUME_CAP = 0.20
 VOLUME_SATURATION_WORDS = 150.0
 SIMPLE_TASK_DISCOUNT = 0.25
-SEMANTIC_SCALE = 1.2
-SEMANTIC_CAP = 0.35
+SEMANTIC_SCALE = 6.0
+SEMANTIC_CAP = 0.55
 SEMANTIC_MARGIN_FLOOR = 0.03
 
 
-def _centroid(vectors: Sequence[bytes]) -> np.ndarray:
+def _normalize_rows(vectors: Sequence[bytes]) -> np.ndarray:
     mat = np.vstack([np.frombuffer(v, dtype=np.float32) for v in vectors])
-    mean = mat.mean(axis=0).astype(np.float32)
-    norm = float(np.linalg.norm(mean))
-    return mean / norm if norm > 0 else mean
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    return np.divide(mat, norms, out=mat, where=norms > 0)
 
 
 def build_semantic_centroids(
-    complex_vectors: Sequence[bytes], simple_vectors: Sequence[bytes]
+    complex_vectors: Sequence[bytes], 
+    simple_vectors: Sequence[bytes]
 ) -> SemanticCentroids:
-    """Build normalized 384-d Complex and Simple anchor centroids for <0.1ms routing."""
-    return _centroid(complex_vectors), _centroid(simple_vectors)
+    """Build normalized 384-d Complex and Simple anchor matrices for <0.1ms max-margin routing."""
+    return _normalize_rows(complex_vectors), _normalize_rows(simple_vectors)
 
 
 def _semantic_score(vector: bytes | None, centroids: SemanticCentroids | None) -> float:
     if vector is None or centroids is None:
         return 0.0
-    complex_centroid, simple_centroid = centroids
+    complex_mat, simple_mat = centroids
     vec = np.frombuffer(vector, dtype=np.float32)
-    if vec.shape != complex_centroid.shape:
+    if vec.ndim != 1 or vec.shape[0] != complex_mat.shape[-1]:
         return 0.0
-    margin = float(vec @ complex_centroid - vec @ simple_centroid)
+    margin = float(np.max(complex_mat @ vec) - np.max(simple_mat @ vec))
     if margin > SEMANTIC_MARGIN_FLOOR:
         return min(SEMANTIC_CAP, (margin - SEMANTIC_MARGIN_FLOOR) * SEMANTIC_SCALE)
     if margin < -SEMANTIC_MARGIN_FLOOR:
@@ -124,16 +147,17 @@ def score_prompt_complexity(
     centroids: SemanticCentroids | None = None,
 ) -> ComplexityResult:
     """Score prompt difficulty; `score >= threshold` routes to the cloud frontier tier."""
-    text_lower = prompt.lower()
-    word_count = len(prompt.split())
+    sample = prompt[:_MAX_SCAN_CHARS]
+    text_lower = sample.lower()
+    word_count = len(sample.split())
 
     reasoning_hits = sum(1 for kw in REASONING_KEYWORDS if kw in text_lower)
     score_reasoning = min(REASONING_CAP, reasoning_hits * REASONING_WEIGHT_PER_HIT)
 
-    syntax_hits = sum(1 for ind in CODE_INDICATORS if ind in prompt)
-    code_kw_hits = sum(1 for pat in _CODE_KW_PATTERNS if pat.search(text_lower))
+    syntax_hits = sum(1 for ind in CODE_INDICATORS if ind in sample)
+    code_kw_hits = len(set(_CODE_KW_RE.findall(text_lower)))
     raw_code = syntax_hits * CODE_WEIGHT_PER_HIT + code_kw_hits * CODE_KEYWORD_WEIGHT_PER_HIT
-    score_code = 0.30 if "```" in prompt and raw_code < 0.30 else min(CODE_CAP, raw_code)
+    score_code = 0.30 if "```" in sample and raw_code < 0.30 else min(CODE_CAP, raw_code)
 
     score_volume = min(VOLUME_CAP, (word_count / VOLUME_SATURATION_WORDS) * VOLUME_CAP)
 

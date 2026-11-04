@@ -189,3 +189,26 @@ async def test_missing_redis_index_self_heals_on_lookup() -> None:
     ft_mock.create_index.assert_awaited_once()
 
 
+@pytest.mark.anyio
+async def test_route_isolation_prevents_local_cache_from_serving_cloud_override() -> None:
+    settings = Settings()
+    docs = [
+        SimpleNamespace(
+            prompt="Hello",
+            system_prompt="",
+            route="LOCAL",
+            answer="1B local reply",
+            vector_distance="0.01",
+        )
+    ]
+    ft_mock = MagicMock()
+    ft_mock.search = AsyncMock(return_value=SimpleNamespace(docs=docs))
+    redis_mock = MagicMock()
+    redis_mock.ft.return_value = ft_mock
+
+    cache = SemanticCache(redis_mock, settings)
+    assert (await cache.lookup("Hello", b"\x00" * 1536, route="LOCAL")).hit is True
+    assert (await cache.lookup("Hello", b"\x00" * 1536, route="CLOUD")).hit is False
+
+
+

@@ -31,7 +31,8 @@ class OnnxEmbedder:
         self._cache: OrderedDict[str, bytes] = OrderedDict()
 
     def _embed_raw(self, norm_text: str) -> bytes:
-        vector: np.ndarray = next(iter(self._model.embed([norm_text]))).astype(np.float32)
+        # all-MiniLM-L6-v2 truncates at 256 tokens (~1k chars); slicing [:2000] avoids tokenizing 100k chars
+        vector: np.ndarray = next(iter(self._model.embed([norm_text[:2000]]))).astype(np.float32)
         if vector.shape[0] != self._expected_dim:
             raise ValueError(f"Embedding dim {vector.shape[0]} != expected {self._expected_dim}")
         return vector.tobytes()

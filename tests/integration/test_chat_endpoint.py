@@ -132,6 +132,19 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
     assert r_hit.headers["X-Gateway-Cache-Hit"] == "true"
     assert r_hit.json()["choices"][0]["message"]["content"] == "Tokyo"
 
+    # Explicit max_tokens bypasses cache so bounded generation is respected
+    r_bounded = client.post(
+        "/v1/chat/completions", json={"prompt": "What is the capital of Japan?", "max_tokens": 20}
+    )
+    assert r_bounded.status_code == 200
+    assert r_bounded.headers["X-Gateway-Cache-Hit"] == "false"
+
+    # Prompts past the embedder's ~256-token window bypass cache (different tails embed identically)
+    long_prompt = "Here is our quarterly report. " * 40 + "Question: what is the capital of Japan?"
+    r_long = client.post("/v1/chat/completions", json={"prompt": long_prompt})
+    assert r_long.status_code == 200
+    assert r_long.headers["X-Gateway-Cache-Hit"] == "false"
+
     r_stream = client.post("/v1/chat/completions", json={"prompt": "Hi", "stream": True})
     assert r_stream.status_code == 400
 

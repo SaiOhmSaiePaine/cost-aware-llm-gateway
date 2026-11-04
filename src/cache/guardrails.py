@@ -10,6 +10,11 @@ _WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
 NEGATION_TOKENS: frozenset[str] = frozenset(
     {"not", "no", "never", "without", "none", "nor", "cannot", "neither", "nothing"}
 )
+STYLE_TOKENS: frozenset[str] = frozenset({
+    "simply", "simple", "briefly", "brief", "short", "concise", "tldr", "eli5",
+    "beginner", "detail", "detailed", "deep", "comprehensive", "advanced", "expert",
+    "formal", "casual",
+})
 
 
 def extract_numbers(text: str) -> list[str]:
@@ -28,8 +33,15 @@ def extract_negations(text: str) -> set[str]:
     return negations
 
 
+def extract_style_modifiers(text: str) -> set[str]:
+    """Depth, length, and tone modifiers ('simply' vs 'in detail') that alter the expected answer."""
+    return {w for w in _WORD_RE.findall(text.lower()) if w in STYLE_TOKENS}
+
+
 def passes_guardrails(new_prompt: str, cached_prompt: str) -> bool:
-    """True only if both prompts share identical numbers and negation markers."""
-    if extract_numbers(new_prompt) != extract_numbers(cached_prompt):
-        return False
-    return extract_negations(new_prompt) == extract_negations(cached_prompt)
+    """True only if both prompts share identical numbers, negations, and style modifiers."""
+    return (
+        extract_numbers(new_prompt) == extract_numbers(cached_prompt)
+        and extract_negations(new_prompt) == extract_negations(cached_prompt)
+        and extract_style_modifiers(new_prompt) == extract_style_modifiers(cached_prompt)
+    )

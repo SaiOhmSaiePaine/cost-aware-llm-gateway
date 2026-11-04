@@ -79,12 +79,20 @@ def test_coding_debugging_design_and_math_prompts_route_cloud(prompt: str) -> No
         "Summarize this short note in bullet points",
         "What is the biological function of the liver?",
         "How do I remove rust from iron tools?",
+        "Give me simple instructions to make bread from scratch",
+        "Where does coffee come from and how is it constructed into a drink?",
     ],
 )
 def test_greetings_facts_and_translations_route_local(prompt: str) -> None:
     result = score_prompt_complexity(prompt, THRESHOLD)
     assert result.score < THRESHOLD
     assert result.tier is RouteTier.LOCAL_SMALL
+
+
+def test_english_words_do_not_trigger_code_syntax_substrings() -> None:
+    r = score_prompt_complexity("Give me simple instructions to make bread from scratch", THRESHOLD)
+    assert r.breakdown.code_syntax == 0.0
+    assert r.tier is RouteTier.LOCAL_SMALL
 
 
 def test_semantic_prototype_boost_routes_complex_vector_to_cloud() -> None:
