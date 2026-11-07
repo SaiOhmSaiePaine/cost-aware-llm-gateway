@@ -64,3 +64,28 @@ def test_single_field_literal_string_is_allowed_and_oversized_prompt_rejected() 
 
     with pytest.raises(ValidationError):
         ChatCompletionRequest.model_validate({"prompt": "a" * 100_001})
+
+
+def test_multi_turn_history_preserved_when_prompt_also_provided() -> None:
+    """Sending multi-turn `messages` alongside `prompt` must not strip earlier user turns."""
+    req = ChatCompletionRequest.model_validate(
+        {
+            "messages": [
+                {"role": "user", "content": "Turn 1"},
+                {"role": "assistant", "content": "Turn 2"},
+                {"role": "user", "content": "Turn 3"},
+            ],
+            "prompt": "Turn 3",
+        }
+    )
+    assert [(t.role, t.content) for t in req.to_turns()] == [
+        ("user", "Turn 1"),
+        ("assistant", "Turn 2"),
+        ("user", "Turn 3"),
+    ]
+
+    # When `prompt` matches a trailing system or assistant message, it must still append as a user turn
+    req_sys = ChatCompletionRequest.model_validate(
+        {"messages": [{"role": "system", "content": "Hello"}], "prompt": "Hello"}
+    )
+    assert [(t.role, t.content) for t in req_sys.to_turns()] == [("system", "Hello"), ("user", "Hello")]

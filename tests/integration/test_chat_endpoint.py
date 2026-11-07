@@ -1,5 +1,4 @@
 """Integration tests for FastAPI endpoints (/v1/chat/completions, /health, /v1/admin/stats)."""
-from collections import OrderedDict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,10 +18,11 @@ from src.telemetry.stats import GatewayStats
 
 
 class _StubLLM(LLMClient):
-    def __init__(self, name: str, reply: str, should_fail: bool = False) -> None:
+    def __init__(self, name: str, reply: str, should_fail: bool = False, finish_reason: str = "stop") -> None:
         self.name = name
         self.reply = reply
         self.should_fail = should_fail
+        self.finish_reason = finish_reason
 
     async def complete(
         self,
@@ -33,7 +33,13 @@ class _StubLLM(LLMClient):
     ) -> LLMResult:
         if self.should_fail:
             raise UpstreamError(self.name, "backend down")
-        return LLMResult(text=self.reply, model=self.name, prompt_tokens=5, completion_tokens=7)
+        return LLMResult(
+            text=self.reply,
+            model=self.name,
+            prompt_tokens=5,
+            completion_tokens=7,
+            finish_reason=self.finish_reason,  # type: ignore[arg-type]
+        )
 
 
 def _build_test_client(
@@ -42,11 +48,9 @@ def _build_test_client(
     cloud_fail: bool = False,
 ) -> tuple[TestClient, GatewayServices]:
     settings = Settings()
-    embedder = OnnxEmbedder.__new__(OnnxEmbedder)
-    embedder._model_name = "stub-onnx"
-    embedder._expected_dim = 384
-    embedder._model = SimpleNamespace(embed=lambda texts: iter([np.ones(384, dtype=np.float32)]))
-    embedder._cache = OrderedDict()
+    embedder = OnnxEmbedder(
+        "stub-onnx", 384, model=SimpleNamespace(embed=lambda texts: iter([np.ones(384, dtype=np.float32)]))
+    )
 
     redis_mock = MagicMock()
     redis_mock.ping = AsyncMock(return_value=True)
@@ -122,6 +126,7 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
     doc = SimpleNamespace(
         prompt="What is the capital of Japan?",
         system_prompt="",
+        route="LOCAL",
         answer="Tokyo",
         vector_distance="0.01",
     )
@@ -131,6 +136,20 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
     assert r_hit.status_code == 200
     assert r_hit.headers["X-Gateway-Cache-Hit"] == "true"
     assert r_hit.json()["choices"][0]["message"]["content"] == "Tokyo"
+    assert r_hit.json()["gateway_metadata"]["complexity_score"] is not None
+
+    # Multi-user-message requests bypass single-turn cache to prevent context collision
+    r_multi_user = client.post(
+        "/v1/chat/completions",
+        json={
+            "messages": [
+                {"role": "user", "content": "Context: ignore Japan"},
+                {"role": "user", "content": "What is the capital of Japan?"},
+            ]
+        },
+    )
+    assert r_multi_user.status_code == 200
+    assert r_multi_user.headers["X-Gateway-Cache-Hit"] == "false"
 
     # Explicit max_tokens bypasses cache so bounded generation is respected
     r_bounded = client.post(
@@ -155,4 +174,72 @@ async def test_all_upstreams_failed_returns_503() -> None:
     r_503 = client.post("/v1/chat/completions", json={"prompt": "Write a Python binary search function"})
     assert r_503.status_code == 503
     assert r_503.json()["error"]["type"] == "upstream_unavailable"
+
+
+def test_truncated_length_response_not_cached_and_multi_turn_code_routes_cloud() -> None:
+    client, services = _build_test_client()
+    pipe_mock = services.redis.pipeline.return_value
+
+    # Multi-message prompt where code is in turn 1 and follow-up is short must still classify as CLOUD
+    r_multi = client.post(
+        "/v1/chat/completions",
+        json={
+            "messages": [
+                {"role": "user", "content": "```python\ndef broken_search(arr):\n    return arr[0]\n```"},
+                {"role": "user", "content": "Debug why this fails"},
+            ]
+        },
+    )
+    assert r_multi.status_code == 200
+    assert r_multi.headers["X-Gateway-Route"] == "CLOUD"
+
+    # Truncated (finish_reason="length") response must propagate finish_reason and skip Redis cache write
+    services.router._local = _StubLLM("llama3.2:1b", "cut off mid-sent", finish_reason="length")
+    before_writes = pipe_mock.execute.await_count
+    r_trunc = client.post("/v1/chat/completions", json={"prompt": "Tell me a short story"})
+    assert r_trunc.status_code == 200
+    assert r_trunc.json()["choices"][0]["finish_reason"] == "length"
+    assert pipe_mock.execute.await_count == before_writes
+
+
+def test_guardrail_block_embedder_failure_circuit_open_and_degraded_health() -> None:
+    divergent_doc = SimpleNamespace(
+        prompt="Calculate taxes for 2023",
+        system_prompt="",
+        route="LOCAL",
+        answer="2023 tax table",
+        vector_distance="0.02",
+    )
+    client, services = _build_test_client(cached_docs=[divergent_doc])
+
+    # 1. Guardrail block increments stats and exposes matched_prompt in gateway_metadata
+    r_guard = client.post("/v1/chat/completions", json={"prompt": "Calculate taxes for 2024"})
+    assert r_guard.status_code == 200
+    assert r_guard.headers["X-Gateway-Cache-Hit"] == "false"
+    meta = r_guard.json()["gateway_metadata"]
+    assert meta["guardrail_blocked"] is True
+    assert meta["matched_prompt"] == "Calculate taxes for 2023"
+    assert services.stats.guardrail_blocks == 1
+
+    # 2. ONNX embedder failure degrades gracefully (never 500s)
+    services.embedder.aembed = AsyncMock(side_effect=RuntimeError("onnx crash"))  # type: ignore[method-assign]
+    r_embed_fail = client.post("/v1/chat/completions", json={"prompt": "Hello world"})
+    assert r_embed_fail.status_code == 200
+    assert r_embed_fail.headers["X-Gateway-Route"] == "LOCAL"
+
+    # 3. Tripped circuit breaker routes complex prompt to LOCAL_CIRCUIT_OPEN_FALLBACK
+    for _ in range(3):
+        services.router.breaker.record_failure()
+    assert services.router.breaker.state == "OPEN"
+    r_open = client.post("/v1/chat/completions", json={"prompt": "Write a Python binary search function"})
+    assert r_open.status_code == 200
+    assert r_open.headers["X-Gateway-Route"] == "LOCAL_CIRCUIT_OPEN_FALLBACK"
+
+    # 4. Redis ping failure reports status="degraded" on /health
+    from redis.exceptions import RedisError
+
+    services.redis.ping = AsyncMock(side_effect=RedisError("connection refused"))
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "degraded", "redis": "down", "circuit_breaker_state": "OPEN"}
 

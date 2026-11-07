@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from src.client.base import ChatTurn, LLMClient, LLMResult, UpstreamError
+from src.client.base import ChatTurn, FinishReason, LLMClient, LLMResult, UpstreamError
 
 
 class OpenAICompatibleClient(LLMClient):
@@ -34,7 +34,9 @@ class OpenAICompatibleClient(LLMClient):
             response = await self._http.post("/chat/completions", json=payload)
             response.raise_for_status()
             body: dict[str, Any] = response.json()
-            text: str = body["choices"][0]["message"]["content"]
+            choice: dict[str, Any] = body["choices"][0]
+            text: str = choice["message"]["content"]
+            finish_reason: FinishReason = "length" if choice.get("finish_reason") == "length" else "stop"
         except httpx.TimeoutException as exc:
             raise UpstreamError(self.name, f"timeout: {exc!r}") from exc
         except httpx.HTTPError as exc:
@@ -48,6 +50,7 @@ class OpenAICompatibleClient(LLMClient):
             model=self._model,
             prompt_tokens=int(usage.get("prompt_tokens", 0)),
             completion_tokens=int(usage.get("completion_tokens", 0)),
+            finish_reason=finish_reason,
         )
 
     async def aclose(self) -> None:

@@ -40,17 +40,17 @@ class SemanticCache:
         self._client = client
         self._settings = settings
         self._query = (
-            Query("*=>[KNN 3 @vector $vec AS vector_distance]")
+            Query("*=>[KNN 10 @vector $vec AS vector_distance]")
             .sort_by("vector_distance")
             .return_fields("prompt", "system_prompt", "route", "answer", "vector_distance")
-            .paging(0, 3)
+            .paging(0, 10)
             .dialect(2)
         )
 
     async def lookup(
         self, prompt: str, vector: bytes, system_prompt: str = "", route: str = ""
     ) -> CacheLookupResult:
-        """Inspect up to 3 nearest neighbors; return the first passing similarity, system/route isolation, and guardrails."""
+        """Inspect up to 10 nearest neighbors; return the first passing similarity, system/route isolation, and guardrails."""
         try:
             results = await self._client.ft(self._settings.cache_index_name).search(
                 self._query, query_params={"vec": vector}
@@ -80,7 +80,7 @@ class SemanticCache:
                 continue
 
             cached_route = _to_str(getattr(doc, "route", "") or "")
-            if route and cached_route and cached_route != route:
+            if route and cached_route != route:
                 continue
 
             cached_prompt = _to_str(doc.prompt)

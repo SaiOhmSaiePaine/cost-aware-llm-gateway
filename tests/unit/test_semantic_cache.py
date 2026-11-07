@@ -33,9 +33,6 @@ class _DummyLLM(LLMClient):
 
 
 def _make_fake_embedder() -> OnnxEmbedder:
-    embedder = OnnxEmbedder.__new__(OnnxEmbedder)
-    embedder._model_name = "fake-onnx"
-    embedder._expected_dim = 384
     call_count = 0
 
     def _fake_embed_list(texts: list[str]):
@@ -44,25 +41,47 @@ def _make_fake_embedder() -> OnnxEmbedder:
         time.sleep(0.01)  # simulate 10ms cold ONNX inference
         yield np.ones(384, dtype=np.float32)
 
-    embedder._model = SimpleNamespace(embed=_fake_embed_list)
-    from collections import OrderedDict
-
-    embedder._cache = OrderedDict()
+    embedder = OnnxEmbedder("fake-onnx", 384, model=SimpleNamespace(embed=_fake_embed_list))
     embedder.call_count = lambda: call_count  # type: ignore[attr-defined]
     return embedder
 
 
 @pytest.mark.anyio
 async def test_lru_embedding_cache_sub_1ms_on_repeat() -> None:
+    import asyncio
+
     embedder = _make_fake_embedder()
-    vec1 = await embedder.aembed("What is the capital of Japan?")
+    results = await asyncio.gather(*(embedder.aembed("What is the capital of Japan?") for _ in range(5)))
     t0 = time.perf_counter()
     vec2 = await embedder.aembed("  what is the CAPITAL of japan?  ")
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-    assert vec1 == vec2
+    assert all(v == vec2 for v in results)
     assert elapsed_ms <= 1.0
     assert embedder.call_count() == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_aembed_updates_lru_recency_and_evicts_least_recently_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.cache.embedder as embedder_mod
+
+    monkeypatch.setattr(embedder_mod, "_LRU_MAXSIZE", 3)
+    embedder = _make_fake_embedder()
+
+    await embedder.aembed("k1")
+    await embedder.aembed("k2")
+    await embedder.aembed("k3")
+    assert embedder.call_count() == 3  # type: ignore[attr-defined]
+
+    # Touch "k1" via aembed hit so "k2" becomes the least-recently-used entry
+    await embedder.aembed("k1")
+    await embedder.aembed("k4")  # evicts "k2", keeps "k1", "k3", "k4"
+    assert embedder.call_count() == 4  # type: ignore[attr-defined]
+
+    await embedder.aembed("k1")  # must still be cached in memory
+    assert embedder.call_count() == 4  # type: ignore[attr-defined]
+    await embedder.aembed("k2")  # was evicted, so this re-runs cold embed
+    assert embedder.call_count() == 5  # type: ignore[attr-defined]
 
 
 @pytest.mark.anyio
@@ -209,6 +228,29 @@ async def test_route_isolation_prevents_local_cache_from_serving_cloud_override(
     cache = SemanticCache(redis_mock, settings)
     assert (await cache.lookup("Hello", b"\x00" * 1536, route="LOCAL")).hit is True
     assert (await cache.lookup("Hello", b"\x00" * 1536, route="CLOUD")).hit is False
+
+    # Legacy/untagged cache entry (route="") must not match when a specific route is requested
+    docs[0].route = ""
+    assert (await cache.lookup("Hello", b"\x00" * 1536, route="CLOUD")).hit is False
+
+
+@pytest.mark.anyio
+async def test_knn_finds_fourth_variant_past_three_guardrail_blocked_neighbors() -> None:
+    settings = Settings()
+    docs = [
+        SimpleNamespace(prompt=f"Calculate taxes for {yr}", system_prompt="", route="LOCAL", answer=f"Tax {yr}", vector_distance="0.02")
+        for yr in (2021, 2022, 2023, 2024)
+    ]
+    ft_mock = MagicMock()
+    ft_mock.search = AsyncMock(return_value=SimpleNamespace(docs=docs))
+    redis_mock = MagicMock()
+    redis_mock.ft.return_value = ft_mock
+
+    cache = SemanticCache(redis_mock, settings)
+    assert "KNN 10" in cache._query.query_string()
+    res = await cache.lookup("Calculate taxes for 2024", b"\x00" * 1536, route="LOCAL")
+    assert res.hit is True
+    assert res.answer == "Tax 2024"
 
 
 

@@ -55,6 +55,7 @@ async def chat_completions(
     background_tasks: BackgroundTasks,
     services: ServicesDep,
 ) -> ChatCompletionResponse:
+    
     if body.stream:
         raise HTTPException(status_code=400, detail="stream=true is not supported yet.")
 
@@ -62,7 +63,7 @@ async def chat_completions(
     stats, settings, breaker = services.stats, services.settings, services.router.breaker
     stats.total_requests += 1
     turns = body.to_turns()
-    prompt = next(t.content for t in reversed(turns) if t.role == "user")
+    prompt = "\n".join(t.content for t in turns if t.role == "user")
     system_prompt = "\n".join(t.content for t in turns if t.role == "system")
 
     # --- Stage 1 & 2: embed, classify tier, and look up tier-isolated semantic cache ---
@@ -70,7 +71,7 @@ async def chat_completions(
         not body.simulate_cloud_outage
         and body.max_tokens is None
         and body.temperature is None
-        and not any(t.role == "assistant" for t in turns)
+        and [t.role for t in turns if t.role != "system"] == ["user"]
         # MiniLM reads only ~256 tokens; longer prompts with different tails embed identically
         and len(prompt) <= _MAX_CACHEABLE_CHARS
     )
@@ -85,6 +86,7 @@ async def chat_completions(
 
     if lookup is not None and lookup.guardrail_blocked:
         stats.guardrail_blocks += 1
+        
     if lookup is not None and lookup.hit and lookup.answer is not None:
         stats.cache_hits += 1
         stats.add_savings(settings.cloud_cost_per_request_usd)
@@ -102,6 +104,8 @@ async def chat_completions(
                 onnx_embed_ms=embed_ms,
                 matched_prompt=lookup.matched_prompt,
                 similarity_score=round(lookup.similarity or 0.0, 3),
+                complexity_score=complexity.score,
+                complexity_breakdown=complexity.breakdown,
             ),
         )
 
@@ -122,8 +126,13 @@ async def chat_completions(
         if dispatch.failover_triggered:
             stats.failover_saves += 1
 
-    # --- Stage 4: background cache write (never cache degraded failover answers) ---
-    if use_cache and vector is not None and not dispatch.failover_triggered:
+    # --- Stage 4: background cache write (never cache degraded failover or truncated answers) ---
+    if (
+        use_cache
+        and vector is not None
+        and not dispatch.failover_triggered
+        and dispatch.result.finish_reason == "stop"
+    ):
         background_tasks.add_task(
             services.cache.store, prompt, dispatch.result.text, vector, system_prompt, dispatch.route
         )
@@ -137,7 +146,12 @@ async def chat_completions(
     )
     return ChatCompletionResponse(
         model=dispatch.result.model,
-        choices=[Choice(message=AssistantMessage(content=dispatch.result.text))],
+        choices=[
+            Choice(
+                message=AssistantMessage(content=dispatch.result.text),
+                finish_reason=dispatch.result.finish_reason,
+            )
+        ],
         usage=usage,
         gateway_metadata=GatewayMetadata(
             routed_to=dispatch.route,

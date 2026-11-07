@@ -12,12 +12,16 @@ from src.api.dependencies import GatewayServices
 from src.cache.embedder import OnnxEmbedder
 from src.cache.redis_client import create_redis_client, ensure_vector_index
 from src.cache.semantic_cache import SemanticCache
+
 from src.client.base import UpstreamError
 from src.client.cloud_client import GeminiClient
 from src.client.vllm_client import OpenAICompatibleClient
+
 from src.config import Settings, get_settings
+
 from src.routing.circuit_breaker import CircuitBreaker
 from src.routing.router import ModelRouter
+
 from src.telemetry.logger import configure_logging
 from src.telemetry.stats import GatewayStats
 
@@ -28,6 +32,7 @@ def _build_services(settings: Settings) -> GatewayServices:
     redis = create_redis_client(settings)
     embedder = OnnxEmbedder(settings.embedding_model, settings.embedding_dim)
     api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
+
     if api_key is None:
         logger.error("gemini_api_key_missing", extra={"effect": "cloud tier will always fail over"})
     model_router = ModelRouter(
@@ -53,8 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     services = _build_services(settings)
     services.router.set_centroids(services.embedder.warmup())
     await ensure_vector_index(services.redis, settings)  # never raises; logs if Redis is down
+    
     app.state.services = services
-    logger.info("gateway_started", extra={"local_model": settings.local_model, "cloud_model": settings.cloud_model})
+    logger.info("gateway_started", 
+                extra={
+                    "local_model": settings.local_model, 
+                    "cloud_model": settings.cloud_model
+                    })
     try:
         yield
     finally:
@@ -64,17 +74,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title=get_settings().app_name, version="0.7.0", lifespan=lifespan)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    app = FastAPI(title=get_settings().app_name, 
+                  version="0.7.0", 
+                  lifespan=lifespan)
+    
+    app.add_middleware(CORSMiddleware, 
+                       allow_origins=["*"], 
+                       allow_methods=["*"], 
+                       allow_headers=["*"],
                        expose_headers=["X-Gateway-Route", "X-Gateway-Latency-Ms", "X-Gateway-Cache-Hit"])
 
     @app.exception_handler(UpstreamError)
     async def _upstream_error_handler(request: Request, exc: UpstreamError) -> JSONResponse:
         request.app.state.services.stats.upstream_errors += 1
-        logger.error("all_upstreams_failed", extra={"provider": exc.provider, "error": str(exc)})
+        logger.error("all_upstreams_failed", 
+                     extra={"provider": exc.provider, 
+                            "error": str(exc)})
+        
         return JSONResponse(
             status_code=503,
-            content={"error": {"message": "All model backends are unavailable.", "type": "upstream_unavailable"}},
+            content={"error": {"message": "All model backends are unavailable.", 
+                               "type": "upstream_unavailable"}},
         )
 
     app.include_router(router.router)

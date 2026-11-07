@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 Role = Literal["system", "user", "assistant"]
+FinishReason = Literal["stop", "length"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,7 @@ class LLMResult:
     model: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    finish_reason: FinishReason = "stop"
 
 
 class UpstreamError(Exception):

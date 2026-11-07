@@ -5,7 +5,7 @@ or "deploy with tests" vs "deploy without tests" score >0.9 cosine similarity.
 """
 import re
 
-_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+_NUMBER_RE = re.compile(r"(?:(?<![a-zA-Z0-9])-)?\d+(?:[.,]\d+)*")
 _WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
 NEGATION_TOKENS: frozenset[str] = frozenset(
     {"not", "no", "never", "without", "none", "nor", "cannot", "neither", "nothing"}

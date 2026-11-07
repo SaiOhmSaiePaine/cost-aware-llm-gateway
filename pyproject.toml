@@ -11,12 +11,13 @@ dependencies = [
     "redis>=5",
     "httpx",
     "fastembed",
+    "onnxruntime",
     "google-genai",
     "numpy",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "openai"]
+dev = ["pytest", "anyio", "openai"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -70,29 +70,28 @@ class ChatCompletionRequest(BaseModel):
         clean_prompt = self.prompt.strip() if _is_meaningful(self.prompt, strip_placeholder=both_sent) and self.prompt else None
         clean_messages = [m for m in (self.messages or []) if _is_meaningful(m.text, strip_placeholder=both_sent)]
 
-        # If a meaningful `prompt` is provided, use it as the active user turn (preserving any system turns)
-        if clean_prompt:
-            clean_messages = [m for m in clean_messages if m.role != "user"]
+        # If a meaningful `prompt` is provided, append it as the active user turn without dropping prior turns
+        if clean_prompt and (
+            not clean_messages or clean_messages[-1].role != "user" or clean_messages[-1].text.strip() != clean_prompt
+        ):
             clean_messages.append(ChatMessage(role="user", content=clean_prompt))
 
-        if not clean_messages and not clean_prompt:
+        if not clean_messages:
             raise ValueError("Provide a non-empty 'prompt' or 'messages' (replace the default 'string' placeholder).")
-        if clean_messages and not any(m.role == "user" for m in clean_messages):
+        if not any(m.role == "user" for m in clean_messages):
             raise ValueError("'messages' must contain at least one non-empty user message.")
         if sum(len(m.text) for m in clean_messages) > _MAX_PROMPT_CHARS:
             raise ValueError(f"Total message length exceeds {_MAX_PROMPT_CHARS} characters.")
 
         self.prompt = clean_prompt
-        self.messages = clean_messages or None
+        self.messages = clean_messages
         return self
 
     def to_turns(self) -> list[ChatTurn]:
         """Normalize to provider-agnostic turns ('developer' is OpenAI's new name for 'system')."""
-        if not self.messages:
-            return [ChatTurn(role="user", content=(self.prompt or "").strip())]
         return [
             ChatTurn(role="system" if m.role == "developer" else m.role, content=m.text.strip())
-            for m in self.messages
+            for m in self.messages  # type: ignore[union-attr]
         ]
 
 
@@ -104,7 +103,7 @@ class AssistantMessage(BaseModel):
 class Choice(BaseModel):
     index: int = 0
     message: AssistantMessage
-    finish_reason: Literal["stop"] = "stop"
+    finish_reason: Literal["stop", "length"] = "stop"
 
 
 class Usage(BaseModel):

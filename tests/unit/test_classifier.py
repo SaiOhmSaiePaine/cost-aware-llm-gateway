@@ -94,6 +94,17 @@ def test_english_words_do_not_trigger_code_syntax_substrings() -> None:
     assert r.breakdown.code_syntax == 0.0
     assert r.tier is RouteTier.LOCAL_SMALL
 
+    r2 = score_prompt_complexity("The approved committee will compare the results of our project", THRESHOLD)
+    assert r2.breakdown.reasoning == 0.18
+    assert r2.tier is RouteTier.LOCAL_SMALL
+
+    r_plural = score_prompt_complexity("Compare trade-offs between microservices and monoliths", THRESHOLD)
+    assert r_plural.tier is RouteTier.CLOUD_FRONTIER
+
+    r_dedup = score_prompt_complexity("What is an algorithm? List two algorithms.", THRESHOLD)
+    assert r_dedup.breakdown.reasoning == 0.18
+    assert r_dedup.tier is RouteTier.LOCAL_SMALL
+
 
 def test_semantic_prototype_boost_routes_complex_vector_to_cloud() -> None:
     dim = 384

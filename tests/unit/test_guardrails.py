@@ -17,6 +17,10 @@ from src.cache.guardrails import extract_negations, extract_numbers, passes_guar
         ("I do want logs", "I don’t want logs"),
         ("Explain recursion simply", "Explain recursion in detail"),
         ("Explain recursion", "Explain recursion briefly"),
+        ("Convert -40C to Fahrenheit", "Convert 40C to Fahrenheit"),
+        ("Balance is -500 dollars", "Balance is 500 dollars"),
+        ("Explain ipv4", "Explain ipv6"),
+        ("Compare sha256 and md5", "Compare sha512 and md5"),
     ],
 )
 def test_blocks_divergent_prompts(new: str, cached: str) -> None:

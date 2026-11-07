@@ -12,6 +12,7 @@ REASONING_KEYWORDS: frozenset[str] = frozenset({
     "prove", "derive", "analyze", "trade-off", "tradeoff", "architecture",
     "architect", "concurrency", "thread-safe", "deadlock", "edge case",
     "root cause", "debug", "difference between", "compare", "optimize",
+
     # Expanded coding, debugging, system design & math signals
     "infinite loop", "memory leak", "race condition", "time complexity",
     "space complexity", "big-o", "algorithm", "binary search",
@@ -32,14 +33,19 @@ CODE_KEYWORDS: frozenset[str] = frozenset({
     "asyncio", "leetcode", "linked list", "hash map", "lru cache",
     "binary tree", "quicksort", "mergesort",
 })
-_CODE_KW_RE: re.Pattern[str] = re.compile(
-    r"(?<!\w)(?:" + "|".join(re.escape(kw) for kw in CODE_KEYWORDS) + r")(?!\w)"
-)
+def _compile_word_re(keywords: frozenset[str]) -> re.Pattern[str]:
+    alts = "|".join(re.escape(kw) for kw in sorted(keywords, key=len, reverse=True))
+    return re.compile(rf"(?<!\w)(?:{alts})(?=s?(?!\w))")
+
+
 _MAX_SCAN_CHARS = 4096
 SIMPLE_TASK_KEYWORDS: frozenset[str] = frozenset({
-    "fix typo", "fix typos", "grammar", "summarize", "summary",
+    "fix typo", "grammar", "summarize", "summary",
     "translate", "rephrase", "format as", "bullet points", "polite", "casual",
 })
+_REASONING_KW_RE = _compile_word_re(REASONING_KEYWORDS)
+_CODE_KW_RE = _compile_word_re(CODE_KEYWORDS)
+_SIMPLE_KW_RE = _compile_word_re(SIMPLE_TASK_KEYWORDS)
 
 COMPLEX_PROTOTYPES: tuple[str, ...] = (
     "Write a function, method, or algorithm in Python, JavaScript, Rust, Go, Java, or C++",
@@ -151,7 +157,7 @@ def score_prompt_complexity(
     text_lower = sample.lower()
     word_count = len(sample.split())
 
-    reasoning_hits = sum(1 for kw in REASONING_KEYWORDS if kw in text_lower)
+    reasoning_hits = len(set(_REASONING_KW_RE.findall(text_lower)))
     score_reasoning = min(REASONING_CAP, reasoning_hits * REASONING_WEIGHT_PER_HIT)
 
     syntax_hits = sum(1 for ind in CODE_INDICATORS if ind in sample)
@@ -161,7 +167,7 @@ def score_prompt_complexity(
 
     score_volume = min(VOLUME_CAP, (word_count / VOLUME_SATURATION_WORDS) * VOLUME_CAP)
 
-    is_simple = any(kw in text_lower for kw in SIMPLE_TASK_KEYWORDS)
+    is_simple = _SIMPLE_KW_RE.search(text_lower) is not None
     discount = SIMPLE_TASK_DISCOUNT if is_simple else 0.0
 
     score_semantic = _semantic_score(vector, centroids)

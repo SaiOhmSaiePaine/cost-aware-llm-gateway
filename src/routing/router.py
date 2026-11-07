@@ -72,10 +72,13 @@ class ModelRouter:
             centroids=self._centroids,
         )
         target = model.strip().lower()
+        
         if target in {"local", self._settings.local_model.lower()}:
             return result.model_copy(update={"tier": RouteTier.LOCAL_SMALL})
+        
         if target in {"cloud", self._settings.cloud_model.lower()}:
             return result.model_copy(update={"tier": RouteTier.CLOUD_FRONTIER})
+        
         return result
 
     async def close(self) -> None:
@@ -125,19 +128,15 @@ class ModelRouter:
             return await self._run_local(
                 messages, RouteTarget.LOCAL_CIRCUIT_OPEN, max_tokens=max_tokens, temperature=temperature
             )
-        was_probe = self._breaker.state == "HALF_OPEN"
 
         try:
-            try:
-                if simulate_cloud_outage:
-                    raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
-                result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
-            finally:
-                if was_probe:
-                    self._breaker.release_probe()
+            if simulate_cloud_outage:
+                self._breaker.release_probe()
+                raise UpstreamError(self._cloud.name, "Simulated Cloud API Outage (503 Service Unavailable)")
+            result = await self._cloud.complete(messages, max_tokens=max_tokens, temperature=temperature)
         except UpstreamError as exc:
             if not simulate_cloud_outage:
-                self._breaker.record_failure(was_probe=was_probe)
+                self._breaker.record_failure()
             logger.warning(
                 "cloud_failover",
                 extra={
@@ -150,6 +149,9 @@ class ModelRouter:
             return await self._run_local(
                 messages, RouteTarget.LOCAL_FAILOVER, max_tokens=max_tokens, temperature=temperature
             )
+        except BaseException:
+            self._breaker.release_probe()
+            raise
 
         self._breaker.record_success()
         return DispatchResult(

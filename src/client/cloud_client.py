@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from google import genai
 from google.genai import types
 
-from src.client.base import ChatTurn, LLMClient, LLMResult, UpstreamError
+from src.client.base import ChatTurn, FinishReason, LLMClient, LLMResult, UpstreamError
 
 
 class GeminiClient(LLMClient):
@@ -58,11 +58,15 @@ class GeminiClient(LLMClient):
             raise UpstreamError(self.name, "empty response (possibly safety-blocked)")
 
         usage = response.usage_metadata
+        candidates = getattr(response, "candidates", None) or []
+        raw_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        finish_reason: FinishReason = "length" if "MAX_TOKENS" in str(raw_reason) else "stop"
         return LLMResult(
             text=response.text,
             model=self._model,
             prompt_tokens=(usage.prompt_token_count or 0) if usage else 0,
             completion_tokens=(usage.candidates_token_count or 0) if usage else 0,
+            finish_reason=finish_reason,
         )
 
     async def aclose(self) -> None:
