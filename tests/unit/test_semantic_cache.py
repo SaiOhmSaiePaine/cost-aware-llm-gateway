@@ -253,4 +253,43 @@ async def test_knn_finds_fourth_variant_past_three_guardrail_blocked_neighbors()
     assert res.answer == "Tax 2024"
 
 
+@pytest.mark.anyio
+async def test_embedder_degrades_gracefully_when_model_init_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.cache.embedder as embedder_mod
+
+    def _boom(*args, **kwargs):
+        raise ValueError("HuggingFace offline")
+
+    monkeypatch.setattr(embedder_mod, "TextEmbedding", _boom)
+    embedder = OnnxEmbedder("sentence-transformers/all-MiniLM-L6-v2", 384)
+    assert embedder.warmup() is None
+    with pytest.raises(RuntimeError, match="unavailable"):
+        await embedder.aembed("hello")
+
+
+@pytest.mark.anyio
+async def test_corrupted_redis_doc_missing_prompt_or_answer_is_skipped() -> None:
+    settings = Settings()
+    docs = [
+        SimpleNamespace(route="LOCAL", vector_distance="0.01"),  # corrupted hash missing prompt & answer
+        SimpleNamespace(
+            prompt="What is the capital of Japan?",
+            system_prompt="",
+            route="LOCAL",
+            answer="Tokyo",
+            vector_distance="0.02",
+        ),
+    ]
+    ft_mock = MagicMock()
+    ft_mock.search = AsyncMock(return_value=SimpleNamespace(docs=docs))
+    redis_mock = MagicMock()
+    redis_mock.ft.return_value = ft_mock
+
+    cache = SemanticCache(redis_mock, settings)
+    res = await cache.lookup("What is the capital of Japan?", b"\x00" * 1536, route="LOCAL")
+    assert res.hit is True
+    assert res.answer == "Tokyo"
+
+
+
 

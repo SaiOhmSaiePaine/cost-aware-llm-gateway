@@ -41,15 +41,18 @@ class OpenAICompatibleClient(LLMClient):
             raise UpstreamError(self.name, f"timeout: {exc!r}") from exc
         except httpx.HTTPError as exc:
             raise UpstreamError(self.name, f"http error: {exc!r}") from exc
-        except (KeyError, IndexError, ValueError) as exc:
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
             raise UpstreamError(self.name, f"malformed response: {exc!r}") from exc
+
+        if not isinstance(text, str) or not text:
+            raise UpstreamError(self.name, "empty response")
 
         usage: dict[str, Any] = body.get("usage") or {}
         return LLMResult(
             text=text,
             model=self._model,
-            prompt_tokens=int(usage.get("prompt_tokens", 0)),
-            completion_tokens=int(usage.get("completion_tokens", 0)),
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
             finish_reason=finish_reason,
         )
 

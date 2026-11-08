@@ -113,13 +113,20 @@ def test_chat_completions_local_cloud_and_cache_hit() -> None:
     )
     assert r_local_outage.json()["gateway_metadata"]["routed_to"] == "LOCAL"
 
-    # 4. Health & Admin stats verify local_routed_calls includes failover calls
+    # 4. Health, Admin stats, and Prometheus /metrics verify telemetry
     health = client.get("/health").json()
     assert health == {"status": "ok", "redis": "up", "circuit_breaker_state": "CLOSED"}
     stats = client.get("/v1/admin/stats").json()
     assert stats["local_routed_calls"] == 5
     assert stats["cloud_routed_calls"] == 1
     assert stats["failover_saves"] == 3
+
+    metrics_res = client.get("/metrics")
+    assert metrics_res.status_code == 200
+    assert "text/plain; version=0.0.4" in metrics_res.headers["content-type"]
+    assert 'gateway_requests_total{cache_hit="false",failover="false",route_target="LOCAL"}' in metrics_res.text
+    assert 'gateway_requests_total{cache_hit="false",failover="false",route_target="CLOUD"}' in metrics_res.text
+    assert "gateway_request_latency_seconds_bucket" in metrics_res.text
 
 
 def test_chat_completions_cache_hit_and_stream_rejected() -> None:
@@ -137,6 +144,10 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
     assert r_hit.headers["X-Gateway-Cache-Hit"] == "true"
     assert r_hit.json()["choices"][0]["message"]["content"] == "Tokyo"
     assert r_hit.json()["gateway_metadata"]["complexity_score"] is not None
+    assert (
+        'gateway_requests_total{cache_hit="true",failover="false",route_target="REDIS_VECTOR_CACHE"}'
+        in client.get("/metrics").text
+    )
 
     # Multi-user-message requests bypass single-turn cache to prevent context collision
     r_multi_user = client.post(
@@ -158,6 +169,14 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
     assert r_bounded.status_code == 200
     assert r_bounded.headers["X-Gateway-Cache-Hit"] == "false"
 
+    # Explicit model override with cache bypassed skips ONNX embedding entirely
+    r_skip_embed = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "What is the capital of Japan?", "model": "local", "max_tokens": 20},
+    )
+    assert r_skip_embed.status_code == 200
+    assert r_skip_embed.json()["gateway_metadata"].get("onnx_embed_ms") is None
+
     # Prompts past the embedder's ~256-token window bypass cache (different tails embed identically)
     long_prompt = "Here is our quarterly report. " * 40 + "Question: what is the capital of Japan?"
     r_long = client.post("/v1/chat/completions", json={"prompt": long_prompt})
@@ -170,10 +189,15 @@ def test_chat_completions_cache_hit_and_stream_rejected() -> None:
 
 @pytest.mark.anyio
 async def test_all_upstreams_failed_returns_503() -> None:
-    client, _ = _build_test_client(local_fail=True, cloud_fail=True)
+    client, services = _build_test_client(local_fail=True, cloud_fail=True)
     r_503 = client.post("/v1/chat/completions", json={"prompt": "Write a Python binary search function"})
     assert r_503.status_code == 503
     assert r_503.json()["error"]["type"] == "upstream_unavailable"
+    assert services.stats.total_requests == 1
+    assert services.stats.upstream_errors == 1
+    metrics_text = client.get("/metrics").text
+    assert 'gateway_requests_total{cache_hit="false",failover="true",route_target="UPSTREAM_ERROR"}' in metrics_text
+    assert "gateway_upstream_errors_total" in metrics_text
 
 
 def test_truncated_length_response_not_cached_and_multi_turn_code_routes_cloud() -> None:
@@ -242,4 +266,7 @@ def test_guardrail_block_embedder_failure_circuit_open_and_degraded_health() -> 
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json() == {"status": "degraded", "redis": "down", "circuit_breaker_state": "OPEN"}
+    metrics_text = client.get("/metrics").text
+    assert "gateway_guardrail_blocks_total" in metrics_text
+    assert "gateway_circuit_breaker_state 2.0" in metrics_text
 

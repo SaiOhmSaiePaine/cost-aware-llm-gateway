@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # --- Embeddings (ONNX via FastEmbed) ---
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = Field(default=384, gt=0)
+    embedding_cache_dir: str = ".cache/fastembed"
 
     # --- Complexity routing ---
     complexity_threshold: float = Field(default=0.35, ge=0.0, le=1.0)

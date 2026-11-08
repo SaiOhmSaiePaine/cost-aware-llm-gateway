@@ -105,6 +105,28 @@ def test_english_words_do_not_trigger_code_syntax_substrings() -> None:
     assert r_dedup.breakdown.reasoning == 0.18
     assert r_dedup.tier is RouteTier.LOCAL_SMALL
 
+    r_english = score_prompt_complexity(
+        "What class of animal is a frog and why do countries import coffee?", THRESHOLD
+    )
+    assert r_english.breakdown.code_syntax == 0.0
+    assert r_english.tier is RouteTier.LOCAL_SMALL
+
+    for prose in (
+        "Where do you live in the summer or winter?",
+        "Please select a birthday gift from this list",
+        "Compare where people live in the summer or winter",
+    ):
+        r_prose = score_prompt_complexity(prose, THRESHOLD)
+        assert r_prose.breakdown.code_syntax == 0.0
+        assert r_prose.tier is RouteTier.LOCAL_SMALL
+
+    r_sql = score_prompt_complexity(
+        "Optimize and analyze: select id, email from users join orders on users.id = orders.user_id where active = 1",
+        THRESHOLD,
+    )
+    assert r_sql.breakdown.code_syntax >= 0.20
+    assert r_sql.tier is RouteTier.CLOUD_FRONTIER
+
 
 def test_semantic_prototype_boost_routes_complex_vector_to_cloud() -> None:
     dim = 384

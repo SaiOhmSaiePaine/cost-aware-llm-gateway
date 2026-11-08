@@ -23,11 +23,11 @@ def extract_numbers(text: str) -> list[str]:
 
 
 def extract_negations(text: str) -> set[str]:
-    """Negation markers, treating contractions like "don't" / "isn't" (including curly '’') as 'not'."""
+    """Negation markers, treating contractions like "don't" / "isn't" (including curly '’') and 'cannot' as 'not'."""
     negations: set[str] = set()
     for word in _WORD_RE.findall(text.lower().replace("’", "'")):
         if word in NEGATION_TOKENS:
-            negations.add(word)
+            negations.add("not" if word == "cannot" else word)
         elif word.endswith("n't"):
             negations.add("not")
     return negations

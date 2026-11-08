@@ -5,6 +5,7 @@ venv/
 ENV/
 
 # Python cache and build artifacts
+.cache/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -32,3 +33,4 @@ docs/
 tasks/
 *.drawio
 .*.drawio.bkp
+.$*.bkp

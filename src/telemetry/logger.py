@@ -27,6 +27,14 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class _QuietPollFilter(logging.Filter):
+    """Suppress high-frequency /health and /metrics scrape lines from uvicorn.access."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "GET /health " not in msg and "GET /metrics " not in msg
+
+
 def configure_logging(level: str = "INFO") -> None:
     """Install the JSON formatter on the root logger (idempotent)."""
     handler = logging.StreamHandler(sys.stdout)
@@ -34,6 +42,7 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
+    logging.getLogger("uvicorn.access").addFilter(_QuietPollFilter())
     # Third-party HTTP clients are noisy at INFO.
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

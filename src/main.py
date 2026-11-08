@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 def _build_services(settings: Settings) -> GatewayServices:
     redis = create_redis_client(settings)
-    embedder = OnnxEmbedder(settings.embedding_model, settings.embedding_dim)
+    embedder = OnnxEmbedder(
+        settings.embedding_model, settings.embedding_dim, cache_dir=settings.embedding_cache_dir
+    )
     api_key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else None
 
     if api_key is None:
@@ -86,7 +88,8 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(UpstreamError)
     async def _upstream_error_handler(request: Request, exc: UpstreamError) -> JSONResponse:
-        request.app.state.services.stats.upstream_errors += 1
+        services = request.app.state.services
+        services.stats.record_upstream_error(services.router.breaker.state)
         logger.error("all_upstreams_failed", 
                      extra={"provider": exc.provider, 
                             "error": str(exc)})

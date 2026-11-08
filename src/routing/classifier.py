@@ -23,9 +23,14 @@ REASONING_KEYWORDS: frozenset[str] = frozenset({
     "segfault", "nullpointerexception",
 })
 CODE_INDICATORS: frozenset[str] = frozenset({
-    "def ", "class ", "fn ", "pub fn", "impl ", "struct ", "async ",
-    "import ", "SELECT ", "WHERE ", "JOIN ", "```", "{", "}",
+    "def ", "fn ", "pub fn", "impl ", "struct ", "async ",
+    "SELECT ", "WHERE ", "JOIN ", "```", "{", "}",
 })
+_AMBIGUOUS_CODE_INDICATORS: frozenset[str] = frozenset({"class ", "import "})
+_SQL_QUERY_RE = re.compile(
+    r"\bselect\b.+?\bfrom\b\s+\w+\s+\b(?:where|(?:inner|left|right|full|cross)\s+join|join|group\s+by|order\s+by|limit)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 CODE_KEYWORDS: frozenset[str] = frozenset({
     "search function", "write a function", "implement", "refactor", "useeffect",
     "react", "typescript", "javascript", "golang", "in rust", "c++",
@@ -162,6 +167,10 @@ def score_prompt_complexity(
 
     syntax_hits = sum(1 for ind in CODE_INDICATORS if ind in sample)
     code_kw_hits = len(set(_CODE_KW_RE.findall(text_lower)))
+    if _SQL_QUERY_RE.search(sample) and syntax_hits < 2:
+        syntax_hits = max(syntax_hits, 2)
+    if syntax_hits > 0 or code_kw_hits > 0:
+        syntax_hits += sum(1 for ind in _AMBIGUOUS_CODE_INDICATORS if ind in sample)
     raw_code = syntax_hits * CODE_WEIGHT_PER_HIT + code_kw_hits * CODE_KEYWORD_WEIGHT_PER_HIT
     score_code = 0.30 if "```" in sample and raw_code < 0.30 else min(CODE_CAP, raw_code)
 

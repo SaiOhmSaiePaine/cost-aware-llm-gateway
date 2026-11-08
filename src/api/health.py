@@ -1,11 +1,12 @@
-"""Health probe and admin stats endpoints."""
+"""Health probe, admin stats, and Prometheus metrics endpoints."""
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from redis.exceptions import RedisError
 
 from src.api.dependencies import GatewayServices, get_services
+from src.telemetry.metrics import render_metrics, set_breaker_state
 from src.telemetry.stats import GatewayStats
 
 router = APIRouter(tags=["ops"])
@@ -45,3 +46,11 @@ async def admin_stats(services: ServicesDep) -> AdminStatsResponse:
         circuit_breaker_state=breaker.state,
         consecutive_cloud_failures=breaker.failure_count,
     )
+
+
+@router.get("/metrics")
+async def metrics(services: ServicesDep) -> Response:
+    """Expose Prometheus text-format metrics for scraping."""
+    set_breaker_state(services.router.breaker.state)
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)

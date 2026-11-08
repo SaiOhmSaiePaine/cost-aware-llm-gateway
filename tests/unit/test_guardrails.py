@@ -35,6 +35,7 @@ def test_blocks_divergent_prompts(new: str, cached: str) -> None:
         ("Price is $1,000", "price is 1000"),  # thousands separator ignored
         ("Don't use recursion", "Do not use recursion"),  # contraction == 'not'
         ("Don’t use recursion", "Do not use recursion"),  # curly apostrophe == 'not'
+        ("Why can't I connect?", "Why cannot I connect?"),  # can't == cannot == 'not'
     ],
 )
 def test_allows_equivalent_prompts(new: str, cached: str) -> None:

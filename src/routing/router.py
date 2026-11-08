@@ -59,8 +59,16 @@ class ModelRouter:
     def breaker(self) -> CircuitBreaker:
         return self._breaker
 
-    def set_centroids(self, centroids: SemanticCentroids) -> None:
+    def set_centroids(self, centroids: SemanticCentroids | None) -> None:
         self._centroids = centroids
+
+    def is_explicit_override(self, model: str) -> bool:
+        return model.strip().lower() in {
+            "local",
+            "cloud",
+            self._settings.local_model.lower(),
+            self._settings.cloud_model.lower(),
+        }
 
     def classify(
         self, prompt: str, vector: bytes | None = None, model: str = "auto-router"

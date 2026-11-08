@@ -83,14 +83,18 @@ class SemanticCache:
             if route and cached_route != route:
                 continue
 
-            cached_prompt = _to_str(doc.prompt)
+            raw_prompt, raw_answer = getattr(doc, "prompt", None), getattr(doc, "answer", None)
+            if raw_prompt is None or raw_answer is None:
+                continue
+
+            cached_prompt = _to_str(raw_prompt)
             if not passes_guardrails(prompt, cached_prompt):
                 if blocked is None:
                     blocked = (cached_prompt, similarity)
                 continue
 
             return CacheLookupResult(
-                hit=True, answer=_to_str(doc.answer), matched_prompt=cached_prompt, similarity=similarity
+                hit=True, answer=_to_str(raw_answer), matched_prompt=cached_prompt, similarity=similarity
             )
 
         if blocked is not None:

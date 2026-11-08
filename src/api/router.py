@@ -61,7 +61,6 @@ async def chat_completions(
 
     start = time.perf_counter()
     stats, settings, breaker = services.stats, services.settings, services.router.breaker
-    stats.total_requests += 1
     turns = body.to_turns()
     prompt = "\n".join(t.content for t in turns if t.role == "user")
     system_prompt = "\n".join(t.content for t in turns if t.role == "system")
@@ -75,7 +74,9 @@ async def chat_completions(
         # MiniLM reads only ~256 tokens; longer prompts with different tails embed identically
         and len(prompt) <= _MAX_CACHEABLE_CHARS
     )
-    vector, embed_ms = await _embed_safe(services, prompt)
+    need_vector = use_cache or not services.router.is_explicit_override(body.model)
+    vector, embed_ms = await _embed_safe(services, prompt) if need_vector else (None, None)
+    stats.record_embed(embed_ms)
     complexity = services.router.classify(prompt, vector=vector, model=body.model)
     target_route = RouteTarget.CLOUD if complexity.tier is RouteTier.CLOUD_FRONTIER else RouteTarget.LOCAL
     lookup = (
@@ -85,12 +86,17 @@ async def chat_completions(
     )
 
     if lookup is not None and lookup.guardrail_blocked:
-        stats.guardrail_blocks += 1
+        stats.record_guardrail_block()
         
     if lookup is not None and lookup.hit and lookup.answer is not None:
-        stats.cache_hits += 1
-        stats.add_savings(settings.cloud_cost_per_request_usd)
         latency_ms = _elapsed_ms(start)
+        stats.record_cache_hit(
+            RouteTarget.CACHE, latency_ms, settings.cloud_cost_per_request_usd, breaker.state
+        )
+        logger.info(
+            "chat_completion",
+            extra={"route": RouteTarget.CACHE, "latency_ms": latency_ms, "cache_hit": True, "score": complexity.score},
+        )
         _set_trace_headers(response, RouteTarget.CACHE, latency_ms, cache_hit=True)
         return ChatCompletionResponse(
             model=RouteTarget.CACHE,
@@ -118,14 +124,6 @@ async def chat_completions(
         temperature=body.temperature,
     )
 
-    if dispatch.route is RouteTarget.CLOUD:
-        stats.cloud_routed_calls += 1
-    else:
-        stats.local_routed_calls += 1
-        stats.add_savings(settings.cloud_cost_per_request_usd - dispatch.cost_usd)
-        if dispatch.failover_triggered:
-            stats.failover_saves += 1
-
     # --- Stage 4: background cache write (never cache degraded failover or truncated answers) ---
     if (
         use_cache
@@ -138,6 +136,17 @@ async def chat_completions(
         )
 
     latency_ms = _elapsed_ms(start)
+    stats.record_dispatch(
+        dispatch.route,
+        latency_ms,
+        settings.cloud_cost_per_request_usd - dispatch.cost_usd,
+        breaker.state,
+        failover=dispatch.failover_triggered,
+    )
+    logger.info(
+        "chat_completion",
+        extra={"route": dispatch.route, "latency_ms": latency_ms, "cache_hit": False, "score": complexity.score},
+    )
     _set_trace_headers(response, dispatch.route, latency_ms, cache_hit=False)
     usage = Usage(
         prompt_tokens=dispatch.result.prompt_tokens,
